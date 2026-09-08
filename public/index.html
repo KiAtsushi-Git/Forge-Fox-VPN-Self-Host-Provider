@@ -46,6 +46,33 @@
 <body class="flex h-screen">
 
 <div id="app" class="flex w-full">
+    <!-- Login screen -->
+    <div v-if="!authToken" class="flex items-center justify-center w-full">
+        <div class="card w-full max-w-sm">
+            <div class="text-3xl font-bold text-center mb-2">🦊 ForgeFox</div>
+            <div class="text-slate-400 text-center text-sm mb-6">Вход в панель провайдера</div>
+            <form @submit.prevent="login">
+                <div class="mb-4">
+                    <label class="block text-sm text-slate-400 mb-1">Логин</label>
+                    <input v-model="loginForm.username" type="text" autocomplete="username"
+                           class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" required>
+                </div>
+                <div class="mb-6">
+                    <label class="block text-sm text-slate-400 mb-1">Пароль</label>
+                    <input v-model="loginForm.password" type="password" autocomplete="current-password"
+                           class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" required>
+                </div>
+                <div v-if="loginError" class="text-red-400 text-sm mb-4">{{ loginError }}</div>
+                <button type="submit" :disabled="isLoggingIn"
+                        class="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-2.5 px-4 rounded transition disabled:opacity-50">
+                    {{ isLoggingIn ? 'Вход...' : 'Войти' }}
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Main app -->
+    <template v-if="authToken">
     <!-- Sidebar -->
     <div class="sidebar w-64 flex flex-col">
         <div class="p-6 text-2xl font-bold text-orange-500 border-b border-slate-700">
@@ -66,8 +93,8 @@
         <header class="flex justify-between items-center mb-8">
             <h1 class="text-3xl font-semibold capitalize">{{ currentTab === 'nodes' ? 'Сервера (Ноды)' : currentTab === 'users' ? 'Пользователи' : 'Дашборд' }}</h1>
             <div class="flex items-center space-x-4">
-                <span>admin</span>
-                <button class="bg-red-500 hover:bg-red-600 px-4 py-2 rounded text-white transition">Выход</button>
+                <span>{{ currentUser }}</span>
+                <button @click="logout" class="bg-red-500 hover:bg-red-600 px-4 py-2 rounded text-white transition">Выход</button>
             </div>
         </header>
 
@@ -327,6 +354,7 @@
             </div>
         </div>
     </div>
+    </template>
 </div>
 
 <script>
@@ -334,6 +362,63 @@
 
     createApp({
         setup() {
+            const authToken = ref(localStorage.getItem('forgefox_token') || '');
+            const currentUser = ref(localStorage.getItem('forgefox_user') || '');
+            const loginForm = ref({ username: '', password: '' });
+            const loginError = ref('');
+            const isLoggingIn = ref(false);
+
+            // fetch wrapper: attaches the auth token, kicks back to login on 401
+            const apiFetch = async (url, options = {}) => {
+                const res = await fetch(url, {
+                    ...options,
+                    headers: {
+                        ...(options.headers || {}),
+                        ...(authToken.value ? { 'Authorization': 'Bearer ' + authToken.value } : {})
+                    }
+                });
+                if (res.status === 401) {
+                    logout();
+                    throw new Error('Unauthorized');
+                }
+                return res;
+            };
+
+            const login = async () => {
+                isLoggingIn.value = true;
+                loginError.value = '';
+                try {
+                    const res = await fetch('/api/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(loginForm.value)
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        authToken.value = data.token;
+                        currentUser.value = data.username;
+                        localStorage.setItem('forgefox_token', data.token);
+                        localStorage.setItem('forgefox_user', data.username);
+                        loginForm.value = { username: '', password: '' };
+                        await fetchStats();
+                        renderChart();
+                    } else {
+                        const data = await res.json().catch(() => ({}));
+                        loginError.value = data.error || 'Ошибка входа';
+                    }
+                } catch (e) {
+                    loginError.value = 'Не удалось подключиться к серверу';
+                }
+                isLoggingIn.value = false;
+            };
+
+            const logout = () => {
+                authToken.value = '';
+                currentUser.value = '';
+                localStorage.removeItem('forgefox_token');
+                localStorage.removeItem('forgefox_user');
+            };
+
             const currentTab = ref('dashboard');
             const currentTheme = ref(localStorage.getItem('forgefox_theme') || 'dark');
             const stats = ref({ nodes_count: 0, clients_count: 0 });
@@ -397,22 +482,22 @@
 
             const fetchStats = async () => {
                 try {
-                    const res = await fetch('/api/dashboard');
-                    stats.value = await res.json();
+                    const res = await apiFetch('/api/dashboard');
+                    if (res.ok) stats.value = await res.json();
                 } catch (e) { console.error(e); }
             };
 
             const fetchNodes = async () => {
                 try {
-                    const res = await fetch('/api/nodes');
-                    nodes.value = await res.json();
+                    const res = await apiFetch('/api/nodes');
+                    if (res.ok) nodes.value = await res.json();
                 } catch (e) { console.error(e); }
             };
-            
+
             const submitNode = async () => {
                 isAddingNode.value = true;
                 try {
-                    const res = await fetch('/api/nodes', {
+                    const res = await apiFetch('/api/nodes', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(newNode.value)
@@ -432,15 +517,15 @@
 
             const fetchClients = async () => {
                 try {
-                    const res = await fetch('/api/clients');
-                    clients.value = await res.json();
+                    const res = await apiFetch('/api/clients');
+                    if (res.ok) clients.value = await res.json();
                 } catch (e) { console.error(e); }
             };
 
             const submitClient = async () => {
                 isAddingClient.value = true;
                 try {
-                    const res = await fetch('/api/clients', {
+                    const res = await apiFetch('/api/clients', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -462,15 +547,15 @@
 
             const fetchMonitoring = async () => {
                 try {
-                    const res = await fetch('/api/monitoring');
-                    monitoring.value = await res.json();
+                    const res = await apiFetch('/api/monitoring');
+                    if (res.ok) monitoring.value = await res.json();
                 } catch (e) { console.error(e); }
             };
 
             const fetchLogs = async () => {
                 try {
-                    const res = await fetch('/api/logs');
-                    logs.value = await res.json();
+                    const res = await apiFetch('/api/logs');
+                    if (res.ok) logs.value = await res.json();
                 } catch (e) { console.error(e); }
             };
 
@@ -489,11 +574,15 @@
             onMounted(() => {
                 // Apply theme on load
                 document.documentElement.setAttribute('data-theme', currentTheme.value);
-                fetchStats();
-                renderChart();
+                if (authToken.value) {
+                    // Validate the stored token; 401 will kick back to the login screen
+                    fetchStats();
+                    renderChart();
+                }
             });
 
-            return { 
+            return {
+                authToken, currentUser, loginForm, loginError, isLoggingIn, login, logout,
                 currentTab, switchTab, stats, currentTheme, setTheme,
                 nodes, newNode, isAddingNode, submitNode,
                 clients, newClient, isAddingClient, submitClient,
