@@ -784,6 +784,7 @@ dependencies = [
 name = "forgefoxvpn-provider"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "bcrypt",
  "chrono",

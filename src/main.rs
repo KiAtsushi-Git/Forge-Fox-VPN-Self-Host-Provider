@@ -18,6 +18,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use models::{Node, Client};
 
 const SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+const SSH_PROVISION_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 struct AppState {
@@ -60,14 +61,14 @@ async fn get_nodes(State(state): State<AppState>) -> Json<Vec<Node>> {
 }
 
 async fn add_node(State(state): State<AppState>, Json(payload): Json<Node>) -> Json<Node> {
-    // In real app, generate UUID if missing, and SSH into node to deploy bridge
     let id = uuid::Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO nodes (id, name, ip, port, ssh_user, status) VALUES (?, ?, ?, ?, ?, ?)")
+    sqlx::query("INSERT INTO nodes (id, name, ip, port, ssh_user, ssh_pass, status) VALUES (?, ?, ?, ?, ?, ?, ?)")
         .bind(&id)
         .bind(&payload.name)
         .bind(&payload.ip)
         .bind(payload.port)
         .bind(&payload.ssh_user)
+        .bind(&payload.ssh_pass)
         .bind("online")
         .execute(&state.db)
         .await
@@ -90,17 +91,81 @@ async fn get_clients(State(state): State<AppState>) -> Json<Vec<Client>> {
     Json(clients)
 }
 
-async fn add_client(State(state): State<AppState>, Json(payload): Json<Client>) -> Json<Client> {
-    let id = uuid::Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO clients (id, username, node_id, expiry, limit_gb, used_bytes) VALUES (?, ?, ?, ?, ?, 0)")
-        .bind(&id)
-        .bind(&payload.username)
+async fn add_client(
+    State(state): State<AppState>,
+    Json(payload): Json<Client>,
+) -> Response {
+    // The username becomes a system SSH user on the node — validate it strictly
+    let username = payload.username.trim().to_string();
+    let valid = !username.is_empty()
+        && username.len() <= 32
+        && username
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if !valid {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Имя пользователя: 1-32 символа, только латиница, цифры, - и _" })),
+        )
+            .into_response();
+    }
+
+    // Find the node to provision the user on
+    let node = match sqlx::query_as::<_, Node>("SELECT * FROM nodes WHERE id = ?")
         .bind(&payload.node_id)
-        .bind(payload.expiry)
-        .bind(payload.limit_gb)
-        .execute(&state.db)
+        .fetch_optional(&state.db)
         .await
-        .expect("Failed to insert client");
+    {
+        Ok(Some(n)) => n,
+        Ok(None) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "Нода не найдена" })),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            tracing::error!("DB error fetching node: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Ошибка БД" })),
+            )
+                .into_response()
+        }
+    };
+
+    // Create the user on the node via SSH
+    let password = gen_password(20);
+    if let Err(e) = provision_user_on_node(&node, &username, &password).await {
+        tracing::error!("Provisioning failed on node {}: {e}", node.name);
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": format!("Не удалось создать пользователя на ноде {}: {}", node.name, e) })),
+        )
+            .into_response();
+    }
+
+    let id = uuid::Uuid::new_v4().to_string();
+    if let Err(e) = sqlx::query(
+        "INSERT INTO clients (id, username, node_id, password, expiry, limit_gb, used_bytes) \
+         VALUES (?, ?, ?, ?, ?, ?, 0)",
+    )
+    .bind(&id)
+    .bind(&username)
+    .bind(&payload.node_id)
+    .bind(&password)
+    .bind(payload.expiry)
+    .bind(payload.limit_gb)
+    .execute(&state.db)
+    .await
+    {
+        tracing::error!("Failed to insert client: {e}");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Ошибка БД при сохранении клиента" })),
+        )
+            .into_response();
+    }
 
     let new_client = sqlx::query_as::<_, Client>("SELECT * FROM clients WHERE id = ?")
         .bind(&id)
@@ -108,7 +173,117 @@ async fn add_client(State(state): State<AppState>, Json(payload): Json<Client>) 
         .await
         .unwrap();
 
-    Json(new_client)
+    Json(new_client).into_response()
+}
+
+// ── Node provisioning (SSH) ─────────────────────────────────────────────────
+
+/// Random password from an unambiguous alphanumeric set.
+fn gen_password(len: usize) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+    (0..len)
+        .map(|_| CHARS[(rand::random::<u64>() % CHARS.len() as u64) as usize] as char)
+        .collect()
+}
+
+struct NodeSshHandler;
+
+#[async_trait::async_trait]
+impl russh::client::Handler for NodeSshHandler {
+    type Error = russh::Error;
+
+    async fn check_server_key(
+        self,
+        _server_public_key: &russh_keys::key::PublicKey,
+    ) -> Result<(Self, bool), Self::Error> {
+        // TODO: pin host keys per node instead of accepting everything
+        Ok((self, true))
+    }
+}
+
+/// Create (or update) the VPN user on the node via SSH.
+///
+/// Mirrors the desktop client's Host install: users go into the `forgefox`
+/// group with the restricted `ff-shell`; if the Host install hasn't been done,
+/// falls back to a normal shell.
+async fn provision_user_on_node(node: &Node, username: &str, password: &str) -> Result<(), String> {
+    let ssh_pass = node
+        .ssh_pass
+        .as_deref()
+        .ok_or_else(|| "у ноды не задан SSH пароль".to_string())?;
+
+    let fut = async {
+        let config = Arc::new(russh::client::Config::default());
+        let mut session = russh::client::connect(
+            config,
+            (node.ip.as_str(), u16::try_from(node.port).unwrap_or(22)),
+            NodeSshHandler,
+        )
+        .await
+        .map_err(|e| format!("SSH connect: {e}"))?;
+
+        let authed = session
+            .authenticate_password(&node.ssh_user, ssh_pass)
+            .await
+            .map_err(|e| format!("SSH auth: {e}"))?;
+        if !authed {
+            return Err("SSH auth: неверный логин/пароль ноды".to_string());
+        }
+
+        // username is validated (alnum/-/_) and the password is generated
+        // from a safe alphabet, so single-quoting here is injection-safe
+        let script = format!(
+            r#"groupadd -f forgefox
+SHELL_PATH=/usr/local/bin/ff-shell
+[ -f "$SHELL_PATH" ] || SHELL_PATH=/bin/bash
+if ! id -u '{user}' >/dev/null 2>&1; then
+  useradd -m -g forgefox -s "$SHELL_PATH" '{user}'
+fi
+echo '{user}:{pass}' | chpasswd
+echo PROVISION_OK"#,
+            user = username,
+            pass = password
+        );
+
+        let mut channel = session
+            .channel_open_session()
+            .await
+            .map_err(|e| format!("SSH channel: {e}"))?;
+        channel
+            .exec(true, script)
+            .await
+            .map_err(|e| format!("SSH exec: {e}"))?;
+
+        let mut output = String::new();
+        let mut exit_code: u32 = 0;
+        while let Some(msg) = channel.wait().await {
+            match msg {
+                russh::ChannelMsg::Data { ref data } => {
+                    output.push_str(&String::from_utf8_lossy(data));
+                }
+                russh::ChannelMsg::ExitStatus { exit_status: code } => {
+                    exit_code = code;
+                }
+                _ => {}
+            }
+        }
+
+        let _ = session
+            .disconnect(russh::Disconnect::ByApplication, "done", "en")
+            .await;
+
+        if exit_code != 0 {
+            return Err(format!("exit code {exit_code}: {output}"));
+        }
+        if !output.contains("PROVISION_OK") {
+            return Err(format!("неожиданный ответ: {output}"));
+        }
+        Ok(())
+    };
+
+    tokio::time::timeout(SSH_PROVISION_TIMEOUT, fut)
+        .await
+        .map_err(|_| "таймаут SSH".to_string())?
 }
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
@@ -230,13 +405,13 @@ async fn get_subscription(
         None => return (StatusCode::NOT_FOUND, "Node not found").into_response(),
     };
 
-    // Note: in a real app, the password would be generated on the Node during creation and stored.
-    // For now, we return a mock password or the client ID.
+    // Note: if provisioning failed the client was never stored, so the
+    // password here is the real one generated and set on the node.
     let name = format!("{} ({})", node.name, client.username);
     let body = format!(
         "ssh://{}:{}@{}:{}#{}\n",
         client.username,
-        "generated_password_here",
+        client.password.as_deref().unwrap_or("generated_password_here"),
         node.ip,
         node.port,
         encode_fragment(&name)
