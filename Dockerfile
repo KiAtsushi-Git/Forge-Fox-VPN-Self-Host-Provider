@@ -1,5 +1,5 @@
-# Build stage
-FROM rust:1.86-slim AS builder
+# Build stage (latest stable — some transitive deps require rustc >= 1.88)
+FROM rust:1-slim AS builder
 WORKDIR /app
 
 # Cache dependencies: build with a dummy main first
