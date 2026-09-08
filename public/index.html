@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ForgeFox VPN Provider</title>
+    <!-- Vue 3 & Tailwind -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --text-color: #f8fafc;
+            --sidebar-bg: #1e293b;
+            --card-bg: #1e293b;
+            --border-color: #334155;
+            --accent-color: #f97316; /* orange-500 */
+        }
+        
+        [data-theme="light"] {
+            --bg-color: #f1f5f9;
+            --text-color: #0f172a;
+            --sidebar-bg: #ffffff;
+            --card-bg: #ffffff;
+            --border-color: #e2e8f0;
+            --accent-color: #3b82f6; /* blue-500 */
+        }
+
+        [data-theme="midnight"] {
+            --bg-color: #000000;
+            --text-color: #e2e8f0;
+            --sidebar-bg: #09090b;
+            --card-bg: #09090b;
+            --border-color: #27272a;
+            --accent-color: #a855f7; /* purple-500 */
+        }
+
+        body { background-color: var(--bg-color); color: var(--text-color); font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; transition: all 0.3s ease; }
+        .sidebar { background-color: var(--sidebar-bg); border-right: 1px solid var(--border-color); }
+        .card { background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 1.5rem; }
+        .accent-text { color: var(--accent-color); }
+        .accent-bg { background-color: var(--accent-color); }
+    </style>
+</head>
+<body class="flex h-screen">
+
+<div id="app" class="flex w-full">
+    <!-- Sidebar -->
+    <div class="sidebar w-64 flex flex-col">
+        <div class="p-6 text-2xl font-bold text-orange-500 border-b border-slate-700">
+            🦊 ForgeFox
+        </div>
+        <nav class="flex-1 p-4 space-y-2">
+            <a href="#" @click.prevent="switchTab('dashboard')" :class="['block p-3 rounded transition', currentTab === 'dashboard' ? 'bg-slate-700' : 'hover:bg-slate-700']">Дашборд</a>
+            <a href="#" @click.prevent="switchTab('nodes')" :class="['block p-3 rounded transition', currentTab === 'nodes' ? 'bg-slate-700' : 'hover:bg-slate-700']">Ноды (Сервера)</a>
+            <a href="#" @click.prevent="switchTab('users')" :class="['block p-3 rounded transition', currentTab === 'users' ? 'bg-slate-700' : 'hover:bg-slate-700']">Пользователи</a>
+            <a href="#" @click.prevent="switchTab('settings')" :class="['block p-3 rounded transition', currentTab === 'settings' ? 'bg-slate-700' : 'hover:bg-slate-700']">Настройки</a>
+        </nav>
+    </div>
+
+    <!-- Main Content -->
+    <div class="flex-1 p-8 overflow-y-auto">
+        <header class="flex justify-between items-center mb-8">
+            <h1 class="text-3xl font-semibold capitalize">{{ currentTab === 'nodes' ? 'Сервера (Ноды)' : currentTab === 'users' ? 'Пользователи' : 'Дашборд' }}</h1>
+            <div class="flex items-center space-x-4">
+                <span>admin</span>
+                <button class="bg-red-500 hover:bg-red-600 px-4 py-2 rounded text-white transition">Выход</button>
+            </div>
+        </header>
+
+        <!-- DASHBOARD TAB -->
+        <div v-if="currentTab === 'dashboard'">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                <div class="card">
+                    <div class="text-slate-400 text-sm">Всего серверов</div>
+                    <div class="text-4xl font-bold mt-2">{{ stats.nodes_count }}</div>
+                </div>
+                <div class="card">
+                    <div class="text-slate-400 text-sm">Активные пользователи</div>
+                    <div class="text-4xl font-bold mt-2">{{ stats.clients_count }}</div>
+                </div>
+                <div class="card">
+                    <div class="text-slate-400 text-sm">Трафик за месяц</div>
+                    <div class="text-4xl font-bold mt-2 text-orange-500">0 GB</div>
+                </div>
+            </div>
+            <div class="card">
+                <h2 class="text-xl font-semibold mb-4">Статистика Трафика</h2>
+                <div class="relative h-64 w-full">
+                    <canvas id="trafficChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- NODES TAB -->
+        <div v-if="currentTab === 'nodes'">
+            <div class="card mb-6">
+                <h2 class="text-xl font-semibold mb-4">Добавить сервер</h2>
+                <form @submit.prevent="submitNode" class="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
+                    <div>
+                        <label class="block text-sm text-slate-400 mb-1">Название</label>
+                        <input v-model="newNode.name" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" required placeholder="Напр. Germany-1">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-slate-400 mb-1">IP адрес</label>
+                        <input v-model="newNode.ip" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" required placeholder="1.2.3.4">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-slate-400 mb-1">SSH Порт</label>
+                        <input v-model.number="newNode.port" type="number" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" required>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-slate-400 mb-1">Пользователь</label>
+                        <input v-model="newNode.ssh_user" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" required>
+                    </div>
+                    <div>
+                        <button type="submit" :disabled="isAddingNode" class="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 px-4 rounded transition disabled:opacity-50">
+                            {{ isAddingNode ? 'Добавление...' : 'Добавить' }}
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="card">
+                <h2 class="text-xl font-semibold mb-4">Список серверов</h2>
+                <div v-if="nodes.length === 0" class="text-slate-400 py-4 text-center">Нет серверов</div>
+                <table v-else class="w-full text-left">
+                    <thead>
+                        <tr class="border-b border-slate-700 text-slate-400">
+                            <th class="pb-3 font-medium">Название</th>
+                            <th class="pb-3 font-medium">IP:Порт</th>
+                            <th class="pb-3 font-medium">Статус</th>
+                            <th class="pb-3 font-medium text-right">Действия</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="n in nodes" :key="n.id" class="border-b border-slate-800 hover:bg-slate-800/50">
+                            <td class="py-4 font-semibold">{{ n.name }}</td>
+                            <td class="py-4 text-slate-300">{{ n.ip }}:{{ n.port }}</td>
+                            <td class="py-4">
+                                <span class="px-2 py-1 rounded text-xs" :class="n.status === 'online' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'">
+                                    {{ n.status }}
+                                </span>
+                            </td>
+                            <td class="py-4 text-right">
+                                <button class="text-slate-400 hover:text-white mx-2">Настроить</button>
+                                <button class="text-red-400 hover:text-red-300">Удалить</button>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- USERS TAB -->
+        <div v-if="currentTab === 'users'">
+            <div class="card mb-6">
+                <h2 class="text-xl font-semibold mb-4">Создать пользователя</h2>
+                <form @submit.prevent="submitClient" class="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
+                    <div>
+                        <label class="block text-sm text-slate-400 mb-1">Имя (username)</label>
+                        <input v-model="newClient.username" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" required placeholder="ivan">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-slate-400 mb-1">Сервер (Нода)</label>
+                        <select v-model="newClient.node_id" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" required>
+                            <option disabled value="">Выберите сервер...</option>
+                            <option v-for="n in nodes" :key="n.id" :value="n.id">{{ n.name }} ({{ n.ip }})</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-slate-400 mb-1">Лимит (GB)</label>
+                        <input v-model="newClient.limit_gb" type="number" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" placeholder="Без лимита">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-slate-400 mb-1">Истекает (Дата)</label>
+                        <input v-model="newClient.expiry" type="datetime-local" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white">
+                    </div>
+                    <div>
+                        <button type="submit" :disabled="isAddingClient || !newClient.node_id" class="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 px-4 rounded transition disabled:opacity-50">
+                            {{ isAddingClient ? 'Создание...' : 'Создать' }}
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="card">
+                <h2 class="text-xl font-semibold mb-4">Список пользователей</h2>
+                <div v-if="clients.length === 0" class="text-slate-400 py-4 text-center">Нет пользователей</div>
+                <table v-else class="w-full text-left">
+                    <thead>
+                        <tr class="border-b border-slate-700 text-slate-400">
+                            <th class="pb-3 font-medium">Username</th>
+                            <th class="pb-3 font-medium">Сервер</th>
+                            <th class="pb-3 font-medium">Трафик</th>
+                            <th class="pb-3 font-medium">Статус</th>
+                            <th class="pb-3 font-medium text-right">Действия</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="c in clients" :key="c.id" class="border-b border-slate-800 hover:bg-slate-800/50">
+                            <td class="py-4 font-semibold">{{ c.username }}</td>
+                            <td class="py-4 text-slate-300">
+                                {{ nodes.find(n => n.id === c.node_id)?.name || 'Неизвестно' }}
+                            </td>
+                            <td class="py-4">
+                                {{ (c.used_bytes / 1024 / 1024 / 1024).toFixed(2) }} GB 
+                                <span v-if="c.limit_gb"> / {{ c.limit_gb }} GB</span>
+                            </td>
+                            <td class="py-4">
+                                <span class="px-2 py-1 rounded text-xs bg-green-500/20 text-green-400">Активен</span>
+                            </td>
+                            <td class="py-4 text-right">
+                                <button class="text-orange-400 hover:text-orange-300 mx-2" @click="prompt('Ссылка на подписку:', location.origin + '/sub/' + c.id)">🔗 Ссылка</button>
+                                <button class="text-red-400 hover:text-red-300">Удалить</button>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- SETTINGS TAB -->
+        <div v-if="currentTab === 'settings'">
+            <div class="card max-w-2xl">
+                <h2 class="text-xl font-semibold mb-6">Настройки Провайдера</h2>
+                
+                <div class="mb-6">
+                    <h3 class="text-lg font-medium text-slate-300 mb-3">Тема оформления</h3>
+                    <div class="grid grid-cols-3 gap-4">
+                        <button @click="setTheme('dark')" :class="['py-3 border rounded text-center transition', currentTheme === 'dark' ? 'border-orange-500 bg-orange-500/10 text-orange-400' : 'border-slate-600 hover:border-slate-400 text-slate-300']">
+                            🌙 Dark (Default)
+                        </button>
+                        <button @click="setTheme('midnight')" :class="['py-3 border rounded text-center transition', currentTheme === 'midnight' ? 'border-purple-500 bg-purple-500/10 text-purple-400' : 'border-slate-600 hover:border-slate-400 text-slate-300']">
+                            🌌 Midnight
+                        </button>
+                        <button @click="setTheme('light')" :class="['py-3 border rounded text-center transition', currentTheme === 'light' ? 'border-blue-500 bg-blue-500/10 text-blue-500' : 'border-slate-600 hover:border-slate-400 text-slate-300']">
+                            ☀️ Light
+                        </button>
+                    </div>
+                </div>
+
+                <hr class="border-slate-700 my-6">
+
+                <div>
+                    <h3 class="text-lg font-medium text-slate-300 mb-3">Управление базой данных</h3>
+                    <div class="flex gap-4">
+                        <button class="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded text-white transition">Скачать бэкап (SQLite)</button>
+                        <button class="border border-red-500 text-red-500 hover:bg-red-500 hover:text-white px-4 py-2 rounded transition">Сбросить статистику</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const { createApp, ref, onMounted } = Vue;
+
+    createApp({
+        setup() {
+            const currentTab = ref('dashboard');
+            const currentTheme = ref(localStorage.getItem('forgefox_theme') || 'dark');
+            const stats = ref({ nodes_count: 0, clients_count: 0 });
+            const nodes = ref([]);
+            let chartInstance = null;
+            
+            const setTheme = (theme) => {
+                currentTheme.value = theme;
+                document.documentElement.setAttribute('data-theme', theme);
+                localStorage.setItem('forgefox_theme', theme);
+                renderChart(); // re-render with new colors
+            };
+
+            const renderChart = () => {
+                if (currentTab.value !== 'dashboard') return;
+                
+                // wait for DOM
+                setTimeout(() => {
+                    const ctx = document.getElementById('trafficChart');
+                    if (!ctx) return;
+                    
+                    if (chartInstance) chartInstance.destroy();
+
+                    const isLight = currentTheme.value === 'light';
+                    const textColor = isLight ? '#64748b' : '#94a3b8';
+                    const gridColor = isLight ? '#e2e8f0' : '#334155';
+                    const accentColor = currentTheme.value === 'midnight' ? '#a855f7' : (isLight ? '#3b82f6' : '#f97316');
+
+                    chartInstance = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'],
+                            datasets: [{
+                                label: 'Трафик (GB)',
+                                data: [12, 19, 3, 5, 2, 3, 10], // mock data
+                                borderColor: accentColor,
+                                backgroundColor: accentColor + '33', // 20% opacity
+                                borderWidth: 2,
+                                fill: true,
+                                tension: 0.4
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: { display: false }
+                            },
+                            scales: {
+                                x: { grid: { color: gridColor }, ticks: { color: textColor } },
+                                y: { grid: { color: gridColor }, ticks: { color: textColor }, beginAtZero: true }
+                            }
+                        }
+                    });
+                }, 100);
+            };
+            
+            // Новая нода форма
+            const newNode = ref({ name: '', ip: '', port: 22, ssh_user: 'root' });
+            const isAddingNode = ref(false);
+
+            const fetchStats = async () => {
+                try {
+                    const res = await fetch('/api/dashboard');
+                    stats.value = await res.json();
+                } catch (e) { console.error(e); }
+            };
+
+            const fetchNodes = async () => {
+                try {
+                    const res = await fetch('/api/nodes');
+                    nodes.value = await res.json();
+                } catch (e) { console.error(e); }
+            };
+            
+            const submitNode = async () => {
+                isAddingNode.value = true;
+                try {
+                    const res = await fetch('/api/nodes', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(newNode.value)
+                    });
+                    if (res.ok) {
+                        newNode.value = { name: '', ip: '', port: 22, ssh_user: 'root' };
+                        await fetchNodes();
+                        await fetchStats();
+                    }
+                } catch (e) { console.error(e); }
+                isAddingNode.value = false;
+            };
+
+            const clients = ref([]);
+            const newClient = ref({ username: '', node_id: '', expiry: null, limit_gb: null });
+            const isAddingClient = ref(false);
+
+            const fetchClients = async () => {
+                try {
+                    const res = await fetch('/api/clients');
+                    clients.value = await res.json();
+                } catch (e) { console.error(e); }
+            };
+
+            const submitClient = async () => {
+                isAddingClient.value = true;
+                try {
+                    const res = await fetch('/api/clients', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            ...newClient.value,
+                            limit_gb: newClient.value.limit_gb ? parseInt(newClient.value.limit_gb) : null
+                        })
+                    });
+                    if (res.ok) {
+                        newClient.value = { username: '', node_id: '', expiry: null, limit_gb: null };
+                        await fetchClients();
+                        await fetchStats();
+                    }
+                } catch (e) { console.error(e); }
+                isAddingClient.value = false;
+            };
+
+            const switchTab = (tab) => {
+                currentTab.value = tab;
+                if (tab === 'dashboard') {
+                    fetchStats();
+                    renderChart();
+                }
+                if (tab === 'nodes') fetchNodes();
+                if (tab === 'users') { fetchNodes(); fetchClients(); }
+            };
+
+            onMounted(() => {
+                // Apply theme on load
+                document.documentElement.setAttribute('data-theme', currentTheme.value);
+                fetchStats();
+                renderChart();
+            });
+
+            return { 
+                currentTab, switchTab, stats, currentTheme, setTheme,
+                nodes, newNode, isAddingNode, submitNode,
+                clients, newClient, isAddingClient, submitClient
+            };
+        }
+    }).mount('#app');
+</script>
+</body>
+</html>
