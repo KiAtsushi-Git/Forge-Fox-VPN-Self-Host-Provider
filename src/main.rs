@@ -60,27 +60,78 @@ async fn get_nodes(State(state): State<AppState>) -> Json<Vec<Node>> {
     Json(nodes)
 }
 
-async fn add_node(State(state): State<AppState>, Json(payload): Json<Node>) -> Json<Node> {
+// Payloads for the create endpoints. They must NOT reuse the persisted models:
+// `Node`/`Client` derive Deserialize with a required `id`, and the dashboard
+// form has no id to send — axum answered every POST with a 422 that the UI
+// silently swallowed.
+
+#[derive(Deserialize)]
+struct NewNode {
+    name: String,
+    ip: String,
+    port: Option<i64>,
+    ssh_user: Option<String>,
+    ssh_pass: Option<String>,
+}
+
+async fn add_node(State(state): State<AppState>, Json(payload): Json<NewNode>) -> Response {
+    let name = payload.name.trim().to_string();
+    let ip = payload.ip.trim().to_string();
+    if name.is_empty() || ip.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Укажите название и IP ноды" })),
+        )
+            .into_response();
+    }
+    let port = match payload.port {
+        Some(p) if p > 0 && p <= 65535 => p,
+        _ => 22,
+    };
+    let ssh_user = payload
+        .ssh_user
+        .and_then(|u| (!u.trim().is_empty()).then(|| u.trim().to_string()))
+        .unwrap_or_else(|| "root".to_string());
+
     let id = uuid::Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO nodes (id, name, ip, port, ssh_user, ssh_pass, status) VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .bind(&id)
-        .bind(&payload.name)
-        .bind(&payload.ip)
-        .bind(payload.port)
-        .bind(&payload.ssh_user)
-        .bind(&payload.ssh_pass)
-        .bind("online")
-        .execute(&state.db)
-        .await
-        .expect("Failed to insert node");
+    let insert = sqlx::query(
+        "INSERT INTO nodes (id, name, ip, port, ssh_user, ssh_pass, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&name)
+    .bind(&ip)
+    .bind(port)
+    .bind(&ssh_user)
+    .bind(&payload.ssh_pass)
+    .bind("online")
+    .execute(&state.db)
+    .await;
+
+    if let Err(e) = insert {
+        tracing::error!("Failed to insert node: {e}");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Ошибка БД при сохранении ноды" })),
+        )
+            .into_response();
+    }
 
     let new_node = sqlx::query_as::<_, Node>("SELECT * FROM nodes WHERE id = ?")
         .bind(&id)
         .fetch_one(&state.db)
-        .await
-        .unwrap();
+        .await;
 
-    Json(new_node)
+    match new_node {
+        Ok(n) => Json(n).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to re-read node: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Ошибка БД при чтении ноды" })),
+            )
+                .into_response()
+        }
+    }
 }
 
 async fn get_clients(State(state): State<AppState>) -> Json<Vec<Client>> {
@@ -91,9 +142,35 @@ async fn get_clients(State(state): State<AppState>) -> Json<Vec<Client>> {
     Json(clients)
 }
 
+#[derive(Deserialize)]
+struct NewClient {
+    username: String,
+    node_id: String,
+    /// Kept as a string: the dashboard's `datetime-local` input sends
+    /// "YYYY-MM-DDTHH:MM" (no seconds), which chrono's NaiveDateTime
+    /// deserializer rejects.
+    expiry: Option<String>,
+    limit_gb: Option<i64>,
+}
+
+/// Parse the expiry formats the dashboard can produce; None keeps it unlimited.
+fn parse_expiry(raw: &str) -> Result<Option<chrono::NaiveDateTime>, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    const FORMATS: [&str; 3] = ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S"];
+    for fmt in FORMATS {
+        if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(raw, fmt) {
+            return Ok(Some(dt));
+        }
+    }
+    Err(format!("Не удалось разобрать дату: {raw} (ожидается ГГГГ-ММ-ДД ЧЧ:ММ)"))
+}
+
 async fn add_client(
     State(state): State<AppState>,
-    Json(payload): Json<Client>,
+    Json(payload): Json<NewClient>,
 ) -> Response {
     // The username becomes a system SSH user on the node — validate it strictly
     let username = payload.username.trim().to_string();
@@ -109,6 +186,18 @@ async fn add_client(
         )
             .into_response();
     }
+
+    let expiry = match payload.expiry.as_deref().map(parse_expiry) {
+        Some(Err(msg)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response()
+        }
+        Some(Ok(exp)) => exp,
+        None => None,
+    };
 
     // Find the node to provision the user on
     let node = match sqlx::query_as::<_, Node>("SELECT * FROM nodes WHERE id = ?")
@@ -154,7 +243,7 @@ async fn add_client(
     .bind(&username)
     .bind(&payload.node_id)
     .bind(&password)
-    .bind(payload.expiry)
+    .bind(expiry)
     .bind(payload.limit_gb)
     .execute(&state.db)
     .await

@@ -153,6 +153,7 @@
                         </button>
                     </div>
                 </form>
+                <div v-if="nodeError" class="text-red-400 text-sm mt-3">{{ nodeError }}</div>
             </div>
 
             <div class="card">
@@ -216,6 +217,7 @@
                         </button>
                     </div>
                 </form>
+                <div v-if="clientError" class="text-red-400 text-sm mt-3">{{ clientError }}</div>
             </div>
 
             <div class="card">
@@ -483,6 +485,7 @@
             // Новая нода форма
             const newNode = ref({ name: '', ip: '', port: 22, ssh_user: 'root', ssh_pass: '' });
             const isAddingNode = ref(false);
+            const nodeError = ref('');
 
             const fetchStats = async () => {
                 try {
@@ -500,6 +503,7 @@
 
             const submitNode = async () => {
                 isAddingNode.value = true;
+                nodeError.value = '';
                 try {
                     const res = await apiFetch('/api/nodes', {
                         method: 'POST',
@@ -510,14 +514,21 @@
                         newNode.value = { name: '', ip: '', port: 22, ssh_user: 'root', ssh_pass: '' };
                         await fetchNodes();
                         await fetchStats();
+                    } else {
+                        const data = await res.json().catch(() => ({}));
+                        nodeError.value = data.error || ('Не удалось добавить ноду (HTTP ' + res.status + ')');
                     }
-                } catch (e) { console.error(e); }
+                } catch (e) {
+                    nodeError.value = 'Не удалось подключиться к серверу';
+                    console.error(e);
+                }
                 isAddingNode.value = false;
             };
 
             const clients = ref([]);
             const newClient = ref({ username: '', node_id: '', expiry: null, limit_gb: null });
             const isAddingClient = ref(false);
+            const clientError = ref('');
 
             const fetchClients = async () => {
                 try {
@@ -528,6 +539,7 @@
 
             const submitClient = async () => {
                 isAddingClient.value = true;
+                clientError.value = '';
                 try {
                     const res = await apiFetch('/api/clients', {
                         method: 'POST',
@@ -541,8 +553,14 @@
                         newClient.value = { username: '', node_id: '', expiry: null, limit_gb: null };
                         await fetchClients();
                         await fetchStats();
+                    } else {
+                        const data = await res.json().catch(() => ({}));
+                        clientError.value = data.error || ('Не удалось создать пользователя (HTTP ' + res.status + ')');
                     }
-                } catch (e) { console.error(e); }
+                } catch (e) {
+                    clientError.value = 'Не удалось подключиться к серверу';
+                    console.error(e);
+                }
                 isAddingClient.value = false;
             };
 
@@ -588,8 +606,8 @@
             return {
                 authToken, currentUser, loginForm, loginError, isLoggingIn, login, logout,
                 currentTab, switchTab, stats, currentTheme, setTheme,
-                nodes, newNode, isAddingNode, submitNode,
-                clients, newClient, isAddingClient, submitClient,
+                nodes, newNode, isAddingNode, nodeError, submitNode,
+                clients, newClient, isAddingClient, clientError, submitClient,
                 monitoring, logs
             };
         }
