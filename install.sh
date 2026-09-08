@@ -1,7 +1,7 @@
 #!/bin/bash
 # ForgeFox VPN Provider - Installation Script
 # Usage:
-#   curl -Ls https://raw.githubusercontent.com/username/forgefoxvpn-provider/master/install.sh | bash -s -- --db sqlite --user admin --pass secret
+#   curl -Ls https://raw.githubusercontent.com/KiAtsushi-Git/Forge-Fox-VPN-Self-Host-Provider/main/install.sh | bash -s -- --db sqlite --user admin --pass secret
 
 set -e
 
