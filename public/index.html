@@ -54,7 +54,9 @@
         <nav class="flex-1 p-4 space-y-2">
             <a href="#" @click.prevent="switchTab('dashboard')" :class="['block p-3 rounded transition', currentTab === 'dashboard' ? 'bg-slate-700' : 'hover:bg-slate-700']">Дашборд</a>
             <a href="#" @click.prevent="switchTab('nodes')" :class="['block p-3 rounded transition', currentTab === 'nodes' ? 'bg-slate-700' : 'hover:bg-slate-700']">Ноды (Сервера)</a>
-            <a href="#" @click.prevent="switchTab('users')" :class="['block p-3 rounded transition', currentTab === 'users' ? 'bg-slate-700' : 'hover:bg-slate-700']">Пользователи</a>
+            <a href="#" @click.prevent="switchTab('users')" :class="['block p-3 rounded transition', currentTab === 'users' ? 'bg-slate-700' : 'hover:bg-slate-700']">Пользователи / Подписки</a>
+            <a href="#" @click.prevent="switchTab('monitoring')" :class="['block p-3 rounded transition', currentTab === 'monitoring' ? 'bg-slate-700' : 'hover:bg-slate-700']">Мониторинг</a>
+            <a href="#" @click.prevent="switchTab('logs')" :class="['block p-3 rounded transition', currentTab === 'logs' ? 'bg-slate-700' : 'hover:bg-slate-700']">Журнал</a>
             <a href="#" @click.prevent="switchTab('settings')" :class="['block p-3 rounded transition', currentTab === 'settings' ? 'bg-slate-700' : 'hover:bg-slate-700']">Настройки</a>
         </nav>
     </div>
@@ -221,9 +223,70 @@
             </div>
         </div>
 
+        <!-- MONITORING TAB -->
+        <div v-if="currentTab === 'monitoring'">
+            <h2 class="text-2xl font-semibold mb-6">Мониторинг Нод</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div v-for="m in monitoring" :key="m.id" class="card">
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="text-lg font-medium">{{ nodes.find(n => n.id === m.id)?.name || m.id }}</h3>
+                        <span class="w-3 h-3 rounded-full bg-green-500 shadow-[0_0_8px_#22c55e]"></span>
+                    </div>
+                    
+                    <div class="space-y-4">
+                        <div>
+                            <div class="flex justify-between text-sm text-slate-400 mb-1">
+                                <span>CPU Usage</span>
+                                <span>{{ m.cpu_percent.toFixed(1) }}%</span>
+                            </div>
+                            <div class="w-full bg-slate-800 rounded-full h-2">
+                                <div class="accent-bg h-2 rounded-full" :style="{ width: m.cpu_percent + '%' }"></div>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="flex justify-between text-sm text-slate-400 mb-1">
+                                <span>RAM Usage</span>
+                                <span>{{ m.ram_mb }} MB</span>
+                            </div>
+                            <div class="w-full bg-slate-800 rounded-full h-2">
+                                <div class="bg-blue-500 h-2 rounded-full" :style="{ width: (m.ram_mb / 4096 * 100) + '%' }"></div>
+                            </div>
+                        </div>
+                        <div class="flex justify-between pt-2 border-t border-slate-700">
+                            <div class="text-green-400 text-sm">↓ {{ m.rx_kbps }} Kbps</div>
+                            <div class="text-blue-400 text-sm">↑ {{ m.tx_kbps }} Kbps</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- LOGS TAB -->
+        <div v-if="currentTab === 'logs'">
+            <div class="card">
+                <h2 class="text-xl font-semibold mb-4">Журнал Действий (Аудит)</h2>
+                <table class="w-full text-left text-sm">
+                    <thead>
+                        <tr class="border-b border-slate-700 text-slate-400">
+                            <th class="pb-3 font-medium">Время</th>
+                            <th class="pb-3 font-medium">Пользователь</th>
+                            <th class="pb-3 font-medium">Действие</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="(log, idx) in logs" :key="idx" class="border-b border-slate-800/50 hover:bg-slate-800/30">
+                            <td class="py-3 text-slate-400">{{ log.time }}</td>
+                            <td class="py-3 text-orange-400">{{ log.user }}</td>
+                            <td class="py-3 text-slate-300">{{ log.action }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
         <!-- SETTINGS TAB -->
         <div v-if="currentTab === 'settings'">
-            <div class="card max-w-2xl">
+            <div class="card max-w-2xl mb-6">
                 <h2 class="text-xl font-semibold mb-6">Настройки Провайдера</h2>
                 
                 <div class="mb-6">
@@ -238,6 +301,17 @@
                         <button @click="setTheme('light')" :class="['py-3 border rounded text-center transition', currentTheme === 'light' ? 'border-blue-500 bg-blue-500/10 text-blue-500' : 'border-slate-600 hover:border-slate-400 text-slate-300']">
                             ☀️ Light
                         </button>
+                    </div>
+                </div>
+
+                <hr class="border-slate-700 my-6">
+
+                <div>
+                    <h3 class="text-lg font-medium text-slate-300 mb-3">Telegram Bot</h3>
+                    <p class="text-sm text-slate-400 mb-4">Привяжите Telegram бота для получения уведомлений об истекающих подписках и создания юзеров прямо из TG.</p>
+                    <div class="flex gap-4">
+                        <input type="text" class="flex-1 bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" placeholder="Bot Token (e.g. 123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11)">
+                        <button class="bg-orange-500 hover:bg-orange-600 px-6 py-2 rounded text-white font-medium transition">Сохранить</button>
                     </div>
                 </div>
 
@@ -383,6 +457,23 @@
                 isAddingClient.value = false;
             };
 
+            const monitoring = ref([]);
+            const logs = ref([]);
+
+            const fetchMonitoring = async () => {
+                try {
+                    const res = await fetch('/api/monitoring');
+                    monitoring.value = await res.json();
+                } catch (e) { console.error(e); }
+            };
+
+            const fetchLogs = async () => {
+                try {
+                    const res = await fetch('/api/logs');
+                    logs.value = await res.json();
+                } catch (e) { console.error(e); }
+            };
+
             const switchTab = (tab) => {
                 currentTab.value = tab;
                 if (tab === 'dashboard') {
@@ -391,6 +482,8 @@
                 }
                 if (tab === 'nodes') fetchNodes();
                 if (tab === 'users') { fetchNodes(); fetchClients(); }
+                if (tab === 'monitoring') { fetchNodes(); fetchMonitoring(); }
+                if (tab === 'logs') fetchLogs();
             };
 
             onMounted(() => {
@@ -403,7 +496,8 @@
             return { 
                 currentTab, switchTab, stats, currentTheme, setTheme,
                 nodes, newNode, isAddingNode, submitNode,
-                clients, newClient, isAddingClient, submitClient
+                clients, newClient, isAddingClient, submitClient,
+                monitoring, logs
             };
         }
     }).mount('#app');

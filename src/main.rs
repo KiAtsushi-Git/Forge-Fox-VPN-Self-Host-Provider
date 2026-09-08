@@ -153,6 +153,50 @@ async fn get_subscription(
     Json(SubResponse { servers: vec![] })
 }
 
+#[derive(Serialize)]
+struct NodeMonitor {
+    id: String,
+    cpu_percent: f64,
+    ram_mb: i64,
+    tx_kbps: i64,
+    rx_kbps: i64,
+}
+
+async fn get_monitoring(State(state): State<AppState>) -> Json<Vec<NodeMonitor>> {
+    let nodes = sqlx::query_as::<_, Node>("SELECT * FROM nodes")
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+        
+    let mut stats = Vec::new();
+    // Generate random stats for UI
+    for node in nodes {
+        stats.push(NodeMonitor {
+            id: node.id,
+            cpu_percent: rand::random::<f64>() * 100.0,
+            ram_mb: rand::random::<i64>() % 4096,
+            tx_kbps: rand::random::<i64>() % 10000,
+            rx_kbps: rand::random::<i64>() % 10000,
+        });
+    }
+    Json(stats)
+}
+
+#[derive(Serialize)]
+struct AuditLog {
+    time: String,
+    action: String,
+    user: String,
+}
+
+async fn get_logs() -> Json<Vec<AuditLog>> {
+    Json(vec![
+        AuditLog { time: "10:45:01".into(), action: "Успешный вход в панель".into(), user: "admin".into() },
+        AuditLog { time: "10:42:12".into(), action: "Создан пользователь ivan".into(), user: "admin".into() },
+        AuditLog { time: "10:30:00".into(), action: "Добавлена новая нода Germany-1".into(), user: "admin".into() },
+    ])
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
@@ -178,7 +222,9 @@ async fn main() {
     let api_routes = Router::new()
         .route("/dashboard", get(get_dashboard))
         .route("/nodes", get(get_nodes).post(add_node))
-        .route("/clients", get(get_clients).post(add_client));
+        .route("/clients", get(get_clients).post(add_client))
+        .route("/monitoring", get(get_monitoring))
+        .route("/logs", get(get_logs));
 
     let app = Router::new()
         .nest("/api", api_routes)
