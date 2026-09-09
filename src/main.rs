@@ -20,7 +20,6 @@ use models::{Node, Client};
 const SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const SSH_PROVISION_TIMEOUT: Duration = Duration::from_secs(30);
 const UPDATE_REPO: &str = "KiAtsushi-Git/Forge-Fox-VPN-Self-Host-Provider";
-const PANEL_VERSION: &str = "1.1.0";
 
 #[derive(Clone)]
 struct AppState {
@@ -791,7 +790,7 @@ async fn get_monitoring(State(state): State<AppState>) -> Response {
 
 #[derive(Serialize)]
 struct UpdateInfo {
-    current_version: &'static str,
+    current_version: String,
     latest_version: String,
     update_available: bool,
     release_url: String,
@@ -800,7 +799,7 @@ struct UpdateInfo {
 
 fn update_info_unavailable(reason: String) -> UpdateInfo {
     UpdateInfo {
-        current_version: PANEL_VERSION,
+        current_version: option_env!("UPDATE_COMMIT").unwrap_or("unknown").to_string(),
         latest_version: String::new(),
         update_available: false,
         release_url: String::new(),
@@ -808,15 +807,19 @@ fn update_info_unavailable(reason: String) -> UpdateInfo {
     }
 }
 
-/// GET /api/update — compare the running version against the newest GitHub release.
-/// Degrades to "no info" on any network failure instead of erroring.
+/// GET /api/update — compare the running build's commit against the tip of
+/// main on GitHub. The update flow ships commits (no releases), so the commit
+/// SHA is the version: the build stamps it via the UPDATE_COMMIT env var
+/// (install.sh / update.sh pass it to docker build), and any change on main
+/// means an update is available.
 async fn get_update_info() -> Response {
+    let current = option_env!("UPDATE_COMMIT").unwrap_or("unknown").to_string();
     let info = match reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
     {
         Ok(client) => match client
-            .get(format!("https://api.github.com/repos/{UPDATE_REPO}/releases/latest"))
+            .get(format!("https://api.github.com/repos/{UPDATE_REPO}/commits/main"))
             .header("User-Agent", "forgefox-provider")
             .header("Accept", "application/vnd.github+json")
             .send()
@@ -824,15 +827,16 @@ async fn get_update_info() -> Response {
         {
             Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
                 Ok(json) => {
-                    let latest = json["tag_name"].as_str().unwrap_or("").trim_start_matches('v').to_string();
+                    let latest = json["sha"].as_str().unwrap_or("").to_string();
+                    let short = if latest.len() >= 7 { latest[..7].to_string() } else { latest.clone() };
                     let url = json["html_url"].as_str().unwrap_or_default().to_string();
-                    let notes = json["body"].as_str().unwrap_or_default().to_string();
+                    let message = json["commit"]["message"].as_str().unwrap_or_default().lines().next().unwrap_or("").to_string();
                     UpdateInfo {
-                        current_version: PANEL_VERSION,
-                        latest_version: latest.clone(),
-                        update_available: !latest.is_empty() && latest != PANEL_VERSION,
+                        current_version: current,
+                        latest_version: short,
+                        update_available: !latest.is_empty() && !latest.starts_with(current.as_str()) && current != "unknown",
                         release_url: url,
-                        release_notes: notes,
+                        release_notes: message,
                     }
                 }
                 Err(e) => update_info_unavailable(format!("не удалось разобрать ответ: {e}")),

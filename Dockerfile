@@ -1,5 +1,8 @@
 # Build stage (latest stable — some transitive deps require rustc >= 1.88)
-FROM rust:1-slim AS builder
+# Pin both stages to the SAME Debian release: a binary built on trixie
+# (glibc 2.39) cannot run on bookworm (glibc 2.36) — the panel container
+# crashed on startup with "GLIBC_2.38 not found".
+FROM rust:1-slim-bookworm AS builder
 WORKDIR /app
 
 # Cache dependencies: build with a dummy main first
