@@ -120,7 +120,16 @@ EOF
 chmod 600 .env
 
 if [ "$DB_TYPE" = "postgres" ]; then
-    cat << 'EOF' > docker-compose.yml
+    # The panel runs in the host network and reaches postgres at
+    # 127.0.0.1:5432. If something else on the host already owns 5432
+    # (WSL images often ship a system postgres), put the container on a
+    # free loopback port instead and point DATABASE_URL at it.
+    PG_HOST_PORT=5432
+    if ss -tlnH 2>/dev/null | grep -qE '127\.0\.0\.1:5432\b|\[::1\]:5432\b|\*:5432\b'; then
+        PG_HOST_PORT=15432
+        log "Port 5432 is already taken on this host — using 127.0.0.1:$PG_HOST_PORT for the panel DB."
+    fi
+    cat << EOF > docker-compose.yml
 services:
   db:
     image: postgres:15-alpine
@@ -138,7 +147,7 @@ services:
     volumes:
       - forgefox_db_data:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:$PG_HOST_PORT:5432"
 
   forgefox-panel:
     image: ${IMAGE}
@@ -146,7 +155,7 @@ services:
     restart: always
     network_mode: host
     environment:
-      - DATABASE_URL=postgres://forgefox:forgefox@127.0.0.1:5432/forgefox
+      - DATABASE_URL=postgres://forgefox:forgefox@127.0.0.1:$PG_HOST_PORT/forgefox
       - ADMIN_USER=${ADMIN_USER}
       - ADMIN_PASS=${ADMIN_PASS}
     depends_on:
