@@ -56,6 +56,8 @@ log "  DB: $DB_TYPE  |  Port: $PORT  |  Admin: $ADMIN_USER"
 # Absolute install dir, resolved at RUN time: the generated docker-compose.yml
 # needs literal absolute paths in its volume mounts (a $INSTALL_DIR variable
 # inside it is read by docker compose as its own env var and comes up empty).
+# The directory may not exist yet on a fresh install — create it first.
+mkdir -p "$INSTALL_DIR"
 REALDIR=$(cd "$INSTALL_DIR" && pwd)
 
 # ---- Base packages: a truly clean system may lack even curl/git ----------
