@@ -831,10 +831,11 @@ async fn get_update_info() -> Response {
                     let short = if latest.len() >= 7 { latest[..7].to_string() } else { latest.clone() };
                     let url = json["html_url"].as_str().unwrap_or_default().to_string();
                     let message = json["commit"]["message"].as_str().unwrap_or_default().lines().next().unwrap_or("").to_string();
+                    let update_available = !latest.is_empty() && !latest.starts_with(current.as_str()) && current != "unknown";
                     UpdateInfo {
                         current_version: current,
                         latest_version: short,
-                        update_available: !latest.is_empty() && !latest.starts_with(&current) && current != "unknown",
+                        update_available,
                         release_url: url,
                         release_notes: message,
                     }
