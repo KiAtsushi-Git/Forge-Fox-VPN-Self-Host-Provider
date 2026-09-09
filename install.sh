@@ -59,14 +59,14 @@ INSTALL_DIR="/opt/forgefox-provider"
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
-# Get the image: pull from ghcr, or build locally from source as fallback
+# Get the image: pull from ghcr, or build locally from source as fallback.
+# The clone is refreshed every run (rm -rf) so a re-install after a code fix
+# never rebuilds from a stale cached checkout.
 if ! docker pull "$IMAGE" 2>/dev/null; then
     echo "⚠️  Image $IMAGE not available on ghcr.io."
     echo "   Building from source (this may take 5-15 minutes on a small VPS)..."
-    if [ ! -d "$INSTALL_DIR/src" ]; then
-        rm -rf "$INSTALL_DIR/build"
-        git clone --depth 1 "$REPO_URL" "$INSTALL_DIR/build"
-    fi
+    rm -rf "$INSTALL_DIR/build"
+    git clone --depth 1 "$REPO_URL" "$INSTALL_DIR/build"
     docker build -t forgefox-provider:local "$INSTALL_DIR/build"
     IMAGE="forgefox-provider:local"
 fi

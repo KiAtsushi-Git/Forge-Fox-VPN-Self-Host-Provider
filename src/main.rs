@@ -9,7 +9,7 @@ use axum::{
     Router, Json,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
+use sqlx::{any::AnyPoolOptions, AnyPool};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -22,7 +22,7 @@ const SSH_PROVISION_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 struct AppState {
-    db: SqlitePool,
+    db: AnyPool,
     // token -> expiry
     sessions: Arc<tokio::sync::Mutex<HashMap<String, Instant>>>,
 }
@@ -53,7 +53,7 @@ async fn get_dashboard(State(state): State<AppState>) -> Json<StatusResponse> {
 }
 
 async fn get_nodes(State(state): State<AppState>) -> Json<Vec<Node>> {
-    let nodes = sqlx::query_as::<_, Node>("SELECT * FROM nodes")
+    let nodes = sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes")
         .fetch_all(&state.db)
         .await
         .unwrap_or_default();
@@ -95,7 +95,7 @@ async fn add_node(State(state): State<AppState>, Json(payload): Json<NewNode>) -
 
     let id = uuid::Uuid::new_v4().to_string();
     let insert = sqlx::query(
-        "INSERT INTO nodes (id, name, ip, port, ssh_user, ssh_pass, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO nodes (id, name, ip, port, ssh_user, ssh_pass, status) VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(&id)
     .bind(&name)
@@ -116,7 +116,7 @@ async fn add_node(State(state): State<AppState>, Json(payload): Json<NewNode>) -
             .into_response();
     }
 
-    let new_node = sqlx::query_as::<_, Node>("SELECT * FROM nodes WHERE id = ?")
+    let new_node = sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes WHERE id = $1")
         .bind(&id)
         .fetch_one(&state.db)
         .await;
@@ -135,7 +135,7 @@ async fn add_node(State(state): State<AppState>, Json(payload): Json<NewNode>) -
 }
 
 async fn get_clients(State(state): State<AppState>) -> Json<Vec<Client>> {
-    let clients = sqlx::query_as::<_, Client>("SELECT * FROM clients")
+    let clients = sqlx::query_as::<_, Client>("SELECT id, username, node_id, password, CAST(expiry AS TEXT) AS expiry, limit_gb, used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients")
         .fetch_all(&state.db)
         .await
         .unwrap_or_default();
@@ -200,7 +200,7 @@ async fn add_client(
     };
 
     // Find the node to provision the user on
-    let node = match sqlx::query_as::<_, Node>("SELECT * FROM nodes WHERE id = ?")
+    let node = match sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes WHERE id = $1")
         .bind(&payload.node_id)
         .fetch_optional(&state.db)
         .await
@@ -237,13 +237,13 @@ async fn add_client(
     let id = uuid::Uuid::new_v4().to_string();
     if let Err(e) = sqlx::query(
         "INSERT INTO clients (id, username, node_id, password, expiry, limit_gb, used_bytes) \
-         VALUES (?, ?, ?, ?, ?, ?, 0)",
+         VALUES ($1, $2, $3, $4, $5, $6, 0)",
     )
     .bind(&id)
     .bind(&username)
     .bind(&payload.node_id)
     .bind(&password)
-    .bind(expiry)
+    .bind(expiry.map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string()))
     .bind(payload.limit_gb)
     .execute(&state.db)
     .await
@@ -256,7 +256,7 @@ async fn add_client(
             .into_response();
     }
 
-    let new_client = sqlx::query_as::<_, Client>("SELECT * FROM clients WHERE id = ?")
+    let new_client = sqlx::query_as::<_, Client>("SELECT id, username, node_id, password, CAST(expiry AS TEXT) AS expiry, limit_gb, used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients WHERE id = $1")
         .bind(&id)
         .fetch_one(&state.db)
         .await
@@ -392,7 +392,7 @@ struct LoginResponse {
 /// POST /api/login — issue a session token for valid credentials.
 async fn login(State(state): State<AppState>, Json(payload): Json<LoginRequest>) -> Response {
     let admin: Option<(String, String)> =
-        sqlx::query_as("SELECT username, password_hash FROM admins WHERE username = ?")
+        sqlx::query_as("SELECT username, password_hash FROM admins WHERE username = $1")
             .bind(&payload.username)
             .fetch_optional(&state.db)
             .await
@@ -472,7 +472,7 @@ async fn get_subscription(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Response {
-    let client = sqlx::query_as::<_, Client>("SELECT * FROM clients WHERE id = ?")
+    let client = sqlx::query_as::<_, Client>("SELECT id, username, node_id, password, CAST(expiry AS TEXT) AS expiry, limit_gb, used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients WHERE id = $1")
         .bind(&id)
         .fetch_optional(&state.db)
         .await
@@ -483,7 +483,7 @@ async fn get_subscription(
         None => return (StatusCode::NOT_FOUND, "Client not found").into_response(),
     };
 
-    let node = sqlx::query_as::<_, Node>("SELECT * FROM nodes WHERE id = ?")
+    let node = sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes WHERE id = $1")
         .bind(&client.node_id)
         .fetch_optional(&state.db)
         .await
@@ -525,7 +525,7 @@ struct NodeMonitor {
 }
 
 async fn get_monitoring(State(state): State<AppState>) -> Json<Vec<NodeMonitor>> {
-    let nodes = sqlx::query_as::<_, Node>("SELECT * FROM nodes")
+    let nodes = sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes")
         .fetch_all(&state.db)
         .await
         .unwrap_or_default();
@@ -564,12 +564,12 @@ async fn get_logs() -> Json<Vec<AuditLog>> {
 /// Sync admin credentials from the environment (set by install.sh via
 /// `--user` / `--pass`) into the admins table, so the credentials used at
 /// install time always work for panel login.
-async fn seed_admin(db: &SqlitePool, username: &str, password: &str) {
+async fn seed_admin(db: &AnyPool, username: &str, password: &str) {
     let hash = bcrypt::hash(password, bcrypt::DEFAULT_COST)
         .expect("Failed to hash admin password");
 
     sqlx::query(
-        "INSERT INTO admins (id, username, password_hash) VALUES (?, ?, ?) \
+        "INSERT INTO admins (id, username, password_hash) VALUES ($1, $2, $3) \
          ON CONFLICT(username) DO UPDATE SET password_hash = excluded.password_hash",
     )
     .bind(uuid::Uuid::new_v4().to_string())
@@ -587,13 +587,16 @@ async fn main() {
     tracing_subscriber::fmt::init();
     tracing::info!("Starting ForgeFox VPN Provider...");
 
-    // Connect to SQLite
+    // Connect to the database. DATABASE_URL decides the backend:
+    // "postgres://..." → PostgreSQL, anything else ("sqlite://..." or empty) → SQLite.
+    // install.sh passes the URL matching the --db choice (postgres|sqlite).
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://forgefox.db?mode=rwc".to_string());
-    let pool = SqlitePoolOptions::new()
+    sqlx::any::install_default_drivers();
+    let pool = AnyPoolOptions::new()
         .max_connections(5)
         .connect(&db_url)
         .await
-        .expect("Failed to connect to SQLite");
+        .expect("Failed to connect to the database");
 
     // Run migrations
     sqlx::migrate!("./migrations")
