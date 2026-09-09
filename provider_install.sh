@@ -109,7 +109,9 @@ rm -rf "$INSTALL_DIR/build"
 git clone --depth 1 "$REPO_URL" "$INSTALL_DIR/build" || die "git clone failed"
 # Stamp the commit into the image — /api/update compares it to the tip of main.
 UPDATE_COMMIT=$(git -C "$INSTALL_DIR/build" rev-parse HEAD)
-docker build --build-arg UPDATE_COMMIT="$UPDATE_COMMIT" -t "$IMAGE" "$INSTALL_DIR/build" || die "docker build failed"
+# --progress=plain: without a TTY docker buffers its output, so the app log
+# would show nothing for the whole 5-15 min build and look hung.
+docker build --progress=plain --build-arg UPDATE_COMMIT="$UPDATE_COMMIT" -t "$IMAGE" "$INSTALL_DIR/build" || die "docker build failed"
 
 # update.sh is bind-mounted into the panel container for self-updates
 cp "$INSTALL_DIR/build/update.sh" "$INSTALL_DIR/update.sh"

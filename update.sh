@@ -24,7 +24,7 @@ UPDATE_COMMIT=$(git -C "$INSTALL_DIR/build" rev-parse HEAD)
 echo "[$(date '+%F %T')] Building commit $UPDATE_COMMIT"
 
 # Rebuild the image from the fresh source
-docker build --build-arg UPDATE_COMMIT="$UPDATE_COMMIT" -t "$IMAGE" "$INSTALL_DIR/build"
+docker build --progress=plain --build-arg UPDATE_COMMIT="$UPDATE_COMMIT" -t "$IMAGE" "$INSTALL_DIR/build"
 
 # Update the scripts (install.sh, update.sh) from the repo
 cp "$INSTALL_DIR/build/install.sh" "$INSTALL_DIR/install.sh" 2>/dev/null || true

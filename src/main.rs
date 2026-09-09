@@ -19,7 +19,16 @@ use models::{Node, Client};
 
 const SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const SSH_PROVISION_TIMEOUT: Duration = Duration::from_secs(30);
+/// install.sh compiles the TUN bridge on the node — that takes minutes on
+/// slow VPSes, so the node-setup run gets a much longer budget than the
+/// quick provisioning/monitoring SSH calls.
+const SSH_SETUP_TIMEOUT: Duration = Duration::from_secs(600);
 const UPDATE_REPO: &str = "KiAtsushi-Git/Forge-Fox-VPN-Self-Host-Provider";
+/// Host-side install script (the same one the desktop client's "Host install"
+/// runs), served raw from the client repo. install.sh is idempotent, so
+/// re-running it on an already-configured node is safe.
+const NODE_INSTALL_URL: &str =
+    "https://raw.githubusercontent.com/KiAtsushi-Git/Forge-Fox-VPN/main/windows/install.sh";
 
 #[derive(Clone)]
 struct AppState {
