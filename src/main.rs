@@ -5,7 +5,7 @@ use axum::{
     http::{header, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Router, Json,
 };
 use serde::{Deserialize, Serialize};
@@ -19,6 +19,8 @@ use models::{Node, Client};
 
 const SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const SSH_PROVISION_TIMEOUT: Duration = Duration::from_secs(30);
+const UPDATE_REPO: &str = "KiAtsushi-Git/Forge-Fox-VPN-Self-Host-Provider";
+const PANEL_VERSION: &str = "1.1.0";
 
 #[derive(Clone)]
 struct AppState {
@@ -237,7 +239,7 @@ async fn add_client(
     let id = uuid::Uuid::new_v4().to_string();
     if let Err(e) = sqlx::query(
         "INSERT INTO clients (id, username, node_id, password, expiry, limit_gb, used_bytes) \
-         VALUES ($1, $2, $3, $4, $5, $6, 0)",
+         VALUES ($1, $2, $3, $4, CAST($5 AS TIMESTAMP), $6, 0)",
     )
     .bind(&id)
     .bind(&username)
@@ -513,50 +515,394 @@ async fn get_subscription(
         .into_response()
 }
 
-// ── Monitoring / Logs (mock) ────────────────────────────────────────────────
+
+
+// ── Node / Client management (edit, delete) ─────────────────────────────────
+
+#[derive(Deserialize)]
+struct NodeUpdate {
+    name: Option<String>,
+    ip: Option<String>,
+    port: Option<i64>,
+    ssh_user: Option<String>,
+    ssh_pass: Option<String>,
+}
+
+/// PUT /api/nodes/:id — update editable node fields (None = keep current).
+async fn update_node(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(payload): Json<NodeUpdate>,
+) -> Response {
+    let name = payload.name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let ip = payload.ip.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    if let Some(p) = payload.port {
+        if !(1..=65535).contains(&p) {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Порт должен быть 1-65535" }))).into_response();
+        }
+    }
+
+    let res = sqlx::query(
+        "UPDATE nodes SET \
+         name = COALESCE($1, name), \
+         ip = COALESCE($2, ip), \
+         port = COALESCE($3, port), \
+         ssh_user = COALESCE($4, ssh_user), \
+         ssh_pass = COALESCE($5, ssh_pass) \
+         WHERE id = $6",
+    )
+    .bind(&name)
+    .bind(&ip)
+    .bind(payload.port)
+    .bind(payload.ssh_user.as_deref().map(str::trim).map(|s| s.to_string()).filter(|s| !s.is_empty()))
+    .bind(&payload.ssh_pass)
+    .bind(&id)
+    .execute(&state.db)
+    .await;
+
+    match res {
+        Ok(r) if r.rows_affected() > 0 => {
+            audit(&state, &format!("Нода {} обновлена", id)).await;
+            let node = sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes WHERE id = $1")
+                .bind(&id)
+                .fetch_one(&state.db)
+                .await;
+            match node {
+                Ok(n) => Json(n).into_response(),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("БД: {e}") }))).into_response(),
+            }
+        }
+        Ok(_) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Нода не найдена" }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("БД: {e}") }))).into_response(),
+    }
+}
+
+/// DELETE /api/nodes/:id — remove a node and its clients (cascade).
+async fn delete_node(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let res = sqlx::query("DELETE FROM nodes WHERE id = $1")
+        .bind(&id)
+        .execute(&state.db)
+        .await;
+    match res {
+        Ok(r) if r.rows_affected() > 0 => {
+            audit(&state, &format!("Нода {} удалена", id)).await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(_) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Нода не найдена" }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("БД: {e}") }))).into_response(),
+    }
+}
+
+/// DELETE /api/clients/:id — remove a client and the SSH user from its node.
+async fn delete_client(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let client = match sqlx::query_as::<_, Client>("SELECT id, username, node_id, password, CAST(expiry AS TEXT) AS expiry, limit_gb, used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients WHERE id = $1")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+    {
+        Ok(Some(c)) => c,
+        Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Клиент не найден" }))).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("БД: {e}") }))).into_response(),
+    };
+
+    // Best-effort removal of the system user on the node
+    let node = sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes WHERE id = $1")
+        .bind(&client.node_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+    if let Some(node) = node {
+        let _ = run_node_command(&node, &format!("id -u '{}' >/dev/null 2>&1 && userdel -r '{}' || true", client.username, client.username)).await;
+    }
+
+    match sqlx::query("DELETE FROM clients WHERE id = $1").bind(&id).execute(&state.db).await {
+        Ok(r) if r.rows_affected() > 0 => {
+            audit(&state, &format!("Клиент {} удалён", client.username)).await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(_) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Клиент не найден" }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("БД: {e}") }))).into_response(),
+    }
+}
+
+// ── Node health check ───────────────────────────────────────────────────────
+
+/// POST /api/nodes/:id/check — SSH into the node, update its status, return it.
+async fn check_node(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let node = match sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes WHERE id = $1")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+    {
+        Ok(Some(n)) => n,
+        Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Нода не найдена" }))).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("БД: {e}") }))).into_response(),
+    };
+
+    let status = match run_node_command(&node, "echo OK").await {
+        Ok(_) => "online".to_string(),
+        Err(e) => {
+            tracing::warn!("Node {} check failed: {e}", node.name);
+            "offline".to_string()
+        }
+    };
+    let _ = sqlx::query("UPDATE nodes SET status = $1 WHERE id = $2")
+        .bind(&status)
+        .bind(&id)
+        .execute(&state.db)
+        .await;
+
+    Json(serde_json::json!({ "id": id, "status": status })).into_response()
+}
+
+// ── SSH command runner ──────────────────────────────────────────────────────
+
+/// Run `command` on the node via SSH and return its stdout.
+/// Shared by the health check, monitoring and user deletion.
+async fn run_node_command(node: &Node, command: &str) -> Result<String, String> {
+    let ssh_pass = node
+        .ssh_pass
+        .as_deref()
+        .ok_or_else(|| "у ноды не задан SSH пароль".to_string())?;
+
+    let fut = async {
+        let config = Arc::new(russh::client::Config::default());
+        let mut session = russh::client::connect(
+            config,
+            (node.ip.as_str(), u16::try_from(node.port).unwrap_or(22)),
+            NodeSshHandler,
+        )
+        .await
+        .map_err(|e| format!("SSH connect: {e}"))?;
+
+        let authed = session
+            .authenticate_password(&node.ssh_user, ssh_pass)
+            .await
+            .map_err(|e| format!("SSH auth: {e}"))?;
+        if !authed {
+            return Err("SSH auth: неверный логин/пароль ноды".to_string());
+        }
+
+        let mut channel = session
+            .channel_open_session()
+            .await
+            .map_err(|e| format!("SSH channel: {e}"))?;
+        channel
+            .exec(true, command)
+            .await
+            .map_err(|e| format!("SSH exec: {e}"))?;
+
+        let mut output = String::new();
+        while let Some(msg) = channel.wait().await {
+            if let russh::ChannelMsg::Data { ref data } = msg {
+                output.push_str(&String::from_utf8_lossy(data));
+            }
+        }
+        let _ = session
+            .disconnect(russh::Disconnect::ByApplication, "done", "en")
+            .await;
+        Ok(output)
+    };
+
+    tokio::time::timeout(SSH_PROVISION_TIMEOUT, fut)
+        .await
+        .map_err(|_| "таймаут SSH".to_string())?
+}
+
+// ── Real monitoring over SSH ────────────────────────────────────────────────
 
 #[derive(Serialize)]
 struct NodeMonitor {
     id: String,
     cpu_percent: f64,
-    ram_mb: i64,
-    tx_kbps: i64,
-    rx_kbps: i64,
+    ram_mb: f64,
+    ram_total_mb: f64,
+    tx_bytes: f64,
+    rx_bytes: f64,
+    online: bool,
 }
 
-async fn get_monitoring(State(state): State<AppState>) -> Json<Vec<NodeMonitor>> {
+/// GET /api/monitoring — real CPU/RAM/traffic per node via SSH (one probe per
+/// node, all in parallel; nodes that fail SSH report online=false).
+async fn get_monitoring(State(state): State<AppState>) -> Response {
     let nodes = sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes")
         .fetch_all(&state.db)
         .await
         .unwrap_or_default();
 
+    // CPU%, MemAvailable MB, MemTotal MB, rx bytes, tx bytes — one line, space-separated
+    let cmd = "echo \"$((100 - $(top -bn1 | grep 'Cpu(s)' | awk '{print int($8)}'))) $(grep MemAvailable /proc/meminfo | awk '{print int($2/1024)}') $(grep MemTotal /proc/meminfo | awk '{print int($2/1024)}') $(cat /proc/net/dev | awk '/:/{sub(/:/,\"\"); if ($1 != \"lo\") {rx+=$2; tx+=$10}} END {print rx, tx}')\"";
+
+    let probes: Vec<_> = nodes
+        .iter()
+        .map(|node| {
+            let owned: Node = Node {
+                id: node.id.clone(),
+                name: node.name.clone(),
+                ip: node.ip.clone(),
+                port: node.port,
+                ssh_user: node.ssh_user.clone(),
+                ssh_pass: node.ssh_pass.clone(),
+                status: node.status.clone(),
+                created_at: node.created_at.clone(),
+            };
+            let cmd = cmd.to_string();
+            tokio::spawn(async move {
+                match run_node_command(&owned, &cmd).await {
+                    Ok(out) => {
+                        let mut it = out.split_whitespace().map(|v| v.parse::<f64>().unwrap_or(0.0));
+                        (
+                            owned.id,
+                            NodeMonitor {
+                                id: String::new(),
+                                cpu_percent: it.next().unwrap_or(0.0),
+                                ram_mb: it.next().unwrap_or(0.0),
+                                ram_total_mb: it.next().unwrap_or(0.0),
+                                rx_bytes: it.next().unwrap_or(0.0),
+                                tx_bytes: it.next().unwrap_or(0.0),
+                                online: true,
+                            },
+                        )
+                    }
+                    Err(_) => (
+                        owned.id,
+                        NodeMonitor {
+                            id: String::new(), cpu_percent: 0.0, ram_mb: 0.0, ram_total_mb: 0.0,
+                            tx_bytes: 0.0, rx_bytes: 0.0, online: false,
+                        },
+                    ),
+                }
+            })
+        })
+        .collect();
+
     let mut stats = Vec::new();
-    // Generate random stats for UI
-    for node in nodes {
-        stats.push(NodeMonitor {
-            id: node.id,
-            cpu_percent: rand::random::<f64>() * 100.0,
-            ram_mb: rand::random::<i64>() % 4096,
-            tx_kbps: rand::random::<i64>() % 10000,
-            rx_kbps: rand::random::<i64>() % 10000,
-        });
+    for probe in probes {
+        if let Ok((id, mut m)) = probe.await {
+            m.id = id;
+            stats.push(m);
+        }
     }
-    Json(stats)
+    Json(stats).into_response()
 }
+
+// ── Update check (GitHub Releases) ──────────────────────────────────────────
 
 #[derive(Serialize)]
-struct AuditLog {
-    time: String,
-    action: String,
-    user: String,
+struct UpdateInfo {
+    current_version: &'static str,
+    latest_version: String,
+    update_available: bool,
+    release_url: String,
+    release_notes: String,
 }
 
-async fn get_logs() -> Json<Vec<AuditLog>> {
-    Json(vec![
-        AuditLog { time: "10:45:01".into(), action: "Успешный вход в панель".into(), user: "admin".into() },
-        AuditLog { time: "10:42:12".into(), action: "Создан пользователь ivan".into(), user: "admin".into() },
-        AuditLog { time: "10:30:00".into(), action: "Добавлена новая нода Germany-1".into(), user: "admin".into() },
-    ])
+fn update_info_unavailable(reason: String) -> UpdateInfo {
+    UpdateInfo {
+        current_version: PANEL_VERSION,
+        latest_version: String::new(),
+        update_available: false,
+        release_url: String::new(),
+        release_notes: reason,
+    }
+}
+
+/// GET /api/update — compare the running version against the newest GitHub release.
+/// Degrades to "no info" on any network failure instead of erroring.
+async fn get_update_info() -> Response {
+    let info = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+    {
+        Ok(client) => match client
+            .get(format!("https://api.github.com/repos/{UPDATE_REPO}/releases/latest"))
+            .header("User-Agent", "forgefox-provider")
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
+                Ok(json) => {
+                    let latest = json["tag_name"].as_str().unwrap_or("").trim_start_matches('v').to_string();
+                    let url = json["html_url"].as_str().unwrap_or_default().to_string();
+                    let notes = json["body"].as_str().unwrap_or_default().to_string();
+                    UpdateInfo {
+                        current_version: PANEL_VERSION,
+                        latest_version: latest.clone(),
+                        update_available: !latest.is_empty() && latest != PANEL_VERSION,
+                        release_url: url,
+                        release_notes: notes,
+                    }
+                }
+                Err(e) => update_info_unavailable(format!("не удалось разобрать ответ: {e}")),
+            },
+            Ok(resp) => update_info_unavailable(format!("GitHub ответил HTTP {}", resp.status())),
+            Err(e) => update_info_unavailable(format!("нет соединения с GitHub: {e}")),
+        },
+        Err(_) => update_info_unavailable("HTTP-клиент недоступен".into()),
+    };
+    Json(info).into_response()
+}
+
+// ── Self-update (POST /api/update/run) ──────────────────────────────────────
+//
+// The panel container runs with /var/run/docker.sock mounted (see install.sh
+// docker-compose) and /opt/forgefox-provider/update.sh bind-mounted from the
+// host. The endpoint spawns that script detached (nohup, output to a log file
+// on the host) and returns immediately — the script re-pulls/rebuilds the
+// image and recreates this container, which severs the connection. The UI
+// polls /api/update until the new version answers.
+
+async fn run_self_update() -> Response {
+    let script = "/app/update.sh";
+    if !std::path::Path::new(script).exists() {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "Скрипт обновления не найден. Панель установлена старой версией install.sh — обновите вручную: curl -Ls https://raw.githubusercontent.com/KiAtsushi-Git/Forge-Fox-VPN-Self-Host-Provider/main/install.sh | bash"
+            })),
+        ).into_response();
+    }
+
+    // Detached: this process (and its HTTP response) may be killed mid-update.
+    let res = tokio::process::Command::new("bash")
+        .arg("-c")
+        .arg(format!("nohup bash {script} > /opt/forgefox-provider/update.log 2>&1 &"))
+        .spawn();
+
+    match res {
+        Ok(_) => Json(serde_json::json!({ "status": "updating" })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("не удалось запустить обновление: {e}") })),
+        ).into_response(),
+    }
+}
+
+// ── Audit log (real) ────────────────────────────────────────────────────────
+
+async fn audit(state: &AppState, action: &str) {
+    let time = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let res = sqlx::query("INSERT INTO audit_log (id, time, action) VALUES ($1, $2, $3)")
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(&time)
+        .bind(action)
+        .execute(&state.db)
+        .await;
+    if let Err(e) = res {
+        tracing::warn!("audit insert failed: {e}");
+    }
+}
+
+async fn get_logs(State(state): State<AppState>) -> Response {
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT CAST(time AS TEXT) AS time, action FROM audit_log ORDER BY CAST(time AS TEXT) DESC",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    Json(rows).into_response()
 }
 
 // ── Startup ──────────────────────────────────────────────────────────────────
@@ -618,9 +964,14 @@ async fn main() {
     let api_routes = Router::new()
         .route("/dashboard", get(get_dashboard))
         .route("/nodes", get(get_nodes).post(add_node))
+        .route("/nodes/:id", axum::routing::put(update_node).delete(delete_node))
+        .route("/nodes/:id/check", post(check_node))
         .route("/clients", get(get_clients).post(add_client))
+        .route("/clients/:id", delete(delete_client))
         .route("/monitoring", get(get_monitoring))
         .route("/logs", get(get_logs))
+        .route("/update", get(get_update_info))
+        .route("/update/run", post(run_self_update))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,

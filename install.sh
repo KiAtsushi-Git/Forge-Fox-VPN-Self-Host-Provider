@@ -71,6 +71,16 @@ if ! docker pull "$IMAGE" 2>/dev/null; then
     IMAGE="forgefox-provider:local"
 fi
 
+# Drop the self-update script next to the compose file (the compose file
+# bind-mounts it into the panel container). When installing from curl|bash
+# (no local checkout), fetch it from the repo.
+if [ -f "$INSTALL_DIR/build/update.sh" ]; then
+    cp "$INSTALL_DIR/build/update.sh" "$INSTALL_DIR/update.sh"
+elif [ ! -f "$INSTALL_DIR/update.sh" ]; then
+    curl -fsSL "$REPO_URL/raw/main/update.sh" -o "$INSTALL_DIR/update.sh" || true
+fi
+[ -f "$INSTALL_DIR/update.sh" ] && chmod +x "$INSTALL_DIR/update.sh"
+
 # Values are passed to compose via .env (no fragile sed on special characters)
 cat > .env <<EOF
 IMAGE=$IMAGE
@@ -90,6 +100,12 @@ services:
       - DATABASE_URL=postgres://forgefox:forgefox@127.0.0.1:5432/forgefox
       - ADMIN_USER=${ADMIN_USER}
       - ADMIN_PASS=${ADMIN_PASS}
+    volumes:
+      # Self-update: the panel drives host docker through the socket and runs
+      # the host's update.sh (see update.sh in this repo).
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/forgefox-provider/update.sh:/app/update.sh:ro
+      - /opt/forgefox-provider:/opt/forgefox-provider
     depends_on:
       - db
   db:
@@ -122,6 +138,11 @@ services:
       - ADMIN_PASS=${ADMIN_PASS}
     volumes:
       - ./data:/app/data
+      # Self-update: the panel drives host docker through the socket and runs
+      # the host's update.sh (see update.sh in this repo).
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/forgefox-provider/update.sh:/app/update.sh:ro
+      - /opt/forgefox-provider:/opt/forgefox-provider
 EOF
 fi
 

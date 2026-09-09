@@ -93,10 +93,24 @@
         <header class="flex justify-between items-center mb-8">
             <h1 class="text-3xl font-semibold capitalize">{{ currentTab === 'nodes' ? 'Сервера (Ноды)' : currentTab === 'users' ? 'Пользователи' : 'Дашборд' }}</h1>
             <div class="flex items-center space-x-4">
+                <span class="text-xs text-slate-500">v{{ updateInfo.current_version || '?' }}</span>
                 <span>{{ currentUser }}</span>
                 <button @click="logout" class="bg-red-500 hover:bg-red-600 px-4 py-2 rounded text-white transition">Выход</button>
             </div>
         </header>
+
+        <!-- Update banner: shows once per release; "Не сейчас" hides it (permanently for THIS version), always visible in Settings -->
+        <div v-if="updateBannerVisible" class="card mb-6 flex items-center justify-between gap-4 border-orange-500/50">
+            <div>
+                <div class="font-semibold text-orange-400 mb-1">🚀 Доступно обновление панели: v{{ updateInfo.latest_version }}</div>
+                <div class="text-sm text-slate-400">Текущая версия: v{{ updateInfo.current_version }}</div>
+            </div>
+            <div class="flex gap-3 shrink-0">
+                <a :href="updateInfo.release_url" target="_blank" class="bg-orange-500 hover:bg-orange-600 px-5 py-2 rounded text-white font-medium transition">Что нового</a>
+                <button @click="updateNow" class="bg-blue-500 hover:bg-blue-600 px-5 py-2 rounded text-white font-medium transition">Обновить</button>
+                <button @click="dismissUpdate" class="border border-slate-600 hover:border-slate-400 px-5 py-2 rounded text-slate-300 transition">Не сейчас</button>
+            </div>
+        </div>
 
         <!-- DASHBOARD TAB -->
         <div v-if="currentTab === 'dashboard'">
@@ -178,8 +192,9 @@
                                 </span>
                             </td>
                             <td class="py-4 text-right">
-                                <button class="text-slate-400 hover:text-white mx-2">Настроить</button>
-                                <button class="text-red-400 hover:text-red-300">Удалить</button>
+                                <button class="text-orange-400 hover:text-orange-300 mx-1" @click="startEditNode(n)">✏️ Настроить</button>
+                                <button class="text-blue-400 hover:text-blue-300 mx-1" @click="checkNode(n)">🩺 Проверить</button>
+                                <button class="text-red-400 hover:text-red-300 mx-1" @click="deleteNode(n)">🗑 Удалить</button>                                <button class="text-red-400 hover:text-red-300">Удалить</button>
                             </td>
                         </tr>
                     </tbody>
@@ -247,8 +262,9 @@
                                 <span class="px-2 py-1 rounded text-xs bg-green-500/20 text-green-400">Активен</span>
                             </td>
                             <td class="py-4 text-right">
-                                <button class="text-orange-400 hover:text-orange-300 mx-2" @click="prompt('Ссылка на подписку:', location.origin + '/sub/' + c.id)">🔗 Ссылка</button>
-                                <button class="text-red-400 hover:text-red-300">Удалить</button>
+                                <button class="text-orange-400 hover:text-orange-300 mx-1" @click="copySub(c)">🔗 Ссылка</button>
+                                <button class="text-purple-400 hover:text-purple-300 mx-1" @click="showQr(c)">📱 QR</button>
+                                <button class="text-red-400 hover:text-red-300 mx-1" @click="deleteClient(c)">🗑 Удалить</button>
                             </td>
                         </tr>
                     </tbody>
@@ -351,6 +367,27 @@
                 <hr class="border-slate-700 my-6">
 
                 <div>
+                    <h3 class="text-lg font-medium text-slate-300 mb-3">Обновление панели</h3>
+                    <div class="flex items-center gap-4 mb-3">
+                        <span class="text-sm text-slate-400">
+                            Текущая: <b class="text-white">v{{ updateInfo.current_version || '?' }}</b> ·
+                            Последняя на GitHub: <b class="text-white">v{{ updateInfo.latest_version || '—' }}</b>
+                        </span>
+                        <button @click="fetchUpdateInfo" class="border border-slate-600 hover:border-slate-400 px-4 py-1.5 rounded text-slate-300 text-sm transition">Проверить снова</button>
+                    </div>
+                    <div v-if="updateInfo.update_available" class="text-sm text-orange-400 mb-3">
+                        Доступно обновление до v{{ updateInfo.latest_version }}
+                        <a :href="updateInfo.release_url" target="_blank" class="underline ml-1">что нового</a>
+                    </div>
+                    <div v-else-if="updateInfo.latest_version" class="text-sm text-green-400">У вас последняя версия ✅</div>
+                    <div v-else-if="updateInfo.release_notes" class="text-xs text-slate-500">{{ updateInfo.release_notes }}</div>
+                    <button v-if="updateInfo.update_available" @click="updateNow"
+                            class="bg-blue-500 hover:bg-blue-600 px-5 py-2 rounded text-white font-medium transition">Обновить сейчас</button>
+                </div>
+
+                <hr class="border-slate-700 my-6">
+
+                <div>
                     <h3 class="text-lg font-medium text-slate-300 mb-3">Управление базой данных</h3>
                     <div class="flex gap-4">
                         <button class="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded text-white transition">Скачать бэкап (SQLite)</button>
@@ -361,6 +398,69 @@
         </div>
     </div>
     </template>
+
+    <!-- Edit node modal -->
+    <div v-if="editingNode" class="fixed inset-0 bg-black/70 flex items-center justify-center z-50" @click.self="editingNode = null">
+        <div class="card w-full max-w-md m-4">
+            <h2 class="text-xl font-semibold mb-4">Настроить ноду «{{ editingNode.name }}»</h2>
+            <form @submit.prevent="saveEditNode" class="space-y-4">
+                <div>
+                    <label class="block text-sm text-slate-400 mb-1">Название</label>
+                    <input v-model="editNodeForm.name" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white">
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm text-slate-400 mb-1">IP</label>
+                        <input v-model="editNodeForm.ip" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-slate-400 mb-1">SSH порт</label>
+                        <input v-model.number="editNodeForm.port" type="number" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white">
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm text-slate-400 mb-1">SSH пользователь</label>
+                        <input v-model="editNodeForm.ssh_user" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-slate-400 mb-1">SSH пароль (пусто = не менять)</label>
+                        <input v-model="editNodeForm.ssh_pass" type="password" placeholder="не меняется" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white">
+                    </div>
+                </div>
+                <div v-if="editNodeError" class="text-red-400 text-sm">{{ editNodeError }}</div>
+                <div class="flex gap-3 justify-end pt-2">
+                    <button type="button" @click="editingNode = null" class="border border-slate-600 hover:border-slate-400 px-5 py-2 rounded text-slate-300 transition">Отмена</button>
+                    <button type="submit" :disabled="isSavingNode" class="bg-orange-500 hover:bg-orange-600 px-6 py-2 rounded text-white font-medium transition disabled:opacity-50">
+                        {{ isSavingNode ? 'Сохранение...' : 'Сохранить' }}
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- QR modal -->
+    <div v-if="qrSub" class="fixed inset-0 bg-black/70 flex items-center justify-center z-50" @click.self="qrSub = null">
+        <div class="card w-full max-w-sm m-4 text-center">
+            <h2 class="text-xl font-semibold mb-2">Подписка {{ qrSub.username }}</h2>
+            <div class="text-sm text-slate-400 mb-4">Отсканируйте в приложении ForgeFox (Android → «+» → подписка)</div>
+            <img :src="qrSrc" alt="QR" class="w-64 h-64 mx-auto rounded bg-white p-2">
+            <div class="text-xs text-slate-500 mt-3 break-all">{{ qrSubUrl }}</div>
+            <button @click="qrSub = null" class="mt-4 border border-slate-600 hover:border-slate-400 px-5 py-2 rounded text-slate-300 transition">Закрыть</button>
+        </div>
+    </div>
+
+    <!-- Confirm modal -->
+    <div v-if="confirmDialog" class="fixed inset-0 bg-black/70 flex items-center justify-center z-50" @click.self="confirmDialog = null">
+        <div class="card w-full max-w-sm m-4">
+            <h2 class="text-lg font-semibold mb-3">{{ confirmDialog.title }}</h2>
+            <div class="text-sm text-slate-400 mb-5">{{ confirmDialog.text }}</div>
+            <div class="flex gap-3 justify-end">
+                <button @click="confirmDialog = null" class="border border-slate-600 hover:border-slate-400 px-5 py-2 rounded text-slate-300 transition">Отмена</button>
+                <button @click="confirmDialog.action" class="bg-red-500 hover:bg-red-600 px-5 py-2 rounded text-white font-medium transition">Подтвердить</button>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -593,6 +693,163 @@
                 if (tab === 'logs') fetchLogs();
             };
 
+            // -- Node editing ----------------------------------------
+            const editingNode = ref(null);
+            const editNodeForm = ref({});
+            const editNodeError = ref('');
+            const isSavingNode = ref(false);
+
+            const startEditNode = (n) => {
+                editingNode.value = n;
+                editNodeError.value = '';
+                editNodeForm.value = { name: n.name, ip: n.ip, port: n.port, ssh_user: n.ssh_user, ssh_pass: '' };
+            };
+
+            const saveEditNode = async () => {
+                isSavingNode.value = true;
+                editNodeError.value = '';
+                try {
+                    const body = { ...editNodeForm.value };
+                    if (!body.ssh_pass) body.ssh_pass = null;
+                    const res = await apiFetch('/api/nodes/' + editingNode.value.id, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body)
+                    });
+                    if (res.ok) {
+                        editingNode.value = null;
+                        await fetchNodes();
+                    } else {
+                        const data = await res.json().catch(() => ({}));
+                        editNodeError.value = data.error || ('Ошибка сохранения (HTTP ' + res.status + ')');
+                    }
+                } catch (e) {
+                    editNodeError.value = 'Не удалось подключиться к серверу';
+                }
+                isSavingNode.value = false;
+            };
+
+            const checkNode = async (n) => {
+                try {
+                    const res = await apiFetch('/api/nodes/' + n.id + '/check', { method: 'POST' });
+                    if (res.ok) {
+                        const data = await res.json();
+                        n.status = data.status;
+                    }
+                } catch (e) { console.error(e); }
+            };
+
+            // -- Confirm dialog --------------------------------------
+            const confirmDialog = ref(null);
+
+            const deleteNode = (n) => {
+                confirmDialog.value = {
+                    title: 'Удалить ноду?',
+                    text: `«${n.name}» (${n.ip}) будет удалена вместе со всеми её пользователями. Системные юзеры на сервере останутся.`,
+                    action: async () => {
+                        confirmDialog.value = null;
+                        try {
+                            const res = await apiFetch('/api/nodes/' + n.id, { method: 'DELETE' });
+                            if (res.status === 204) { await fetchNodes(); await fetchStats(); }
+                        } catch (e) { console.error(e); }
+                    }
+                };
+            };
+
+            const deleteClient = (c) => {
+                confirmDialog.value = {
+                    title: 'Удалить пользователя?',
+                    text: `«${c.username}» будет удалён из панели и с сервера (SSH-юзер удаляется на ноде).`,
+                    action: async () => {
+                        confirmDialog.value = null;
+                        try {
+                            const res = await apiFetch('/api/clients/' + c.id, { method: 'DELETE' });
+                            if (res.status === 204) { await fetchClients(); await fetchStats(); }
+                        } catch (e) { console.error(e); }
+                    }
+                };
+            };
+
+            // -- Subscription link / QR ------------------------------
+            const qrSub = ref(null);
+            const qrSubUrl = ref('');
+            const qrSrc = ref('');
+
+            const subUrl = (c) => location.origin + '/sub/' + c.id;
+
+            const copySub = async (c) => {
+                const url = subUrl(c);
+                try {
+                    await navigator.clipboard.writeText(url);
+                } catch (e) {
+                    const ta = document.createElement('textarea');
+                    ta.value = url; document.body.appendChild(ta);
+                    ta.select(); document.execCommand('copy'); ta.remove();
+                }
+            };
+
+            const showQr = (c) => {
+                qrSub.value = c;
+                qrSubUrl.value = subUrl(c);
+                qrSrc.value = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' + encodeURIComponent(qrSubUrl.value);
+            };
+
+            // -- Update checker (GitHub Releases) --------------------
+            const updateInfo = ref({});
+            const updateBannerVisible = ref(false);
+
+            const fetchUpdateInfo = async () => {
+                try {
+                    const res = await apiFetch('/api/update');
+                    if (res.ok) {
+                        updateInfo.value = await res.json();
+                        // "Не сейчас" hides the banner only for THIS release version;
+                        // a future release shows it again. Always re-checkable in Settings.
+                        const dismissed = localStorage.getItem('forgefox_update_dismissed');
+                        updateBannerVisible.value =
+                            updateInfo.value.update_available &&
+                            updateInfo.value.latest_version !== dismissed;
+                    }
+                } catch (e) { console.error(e); }
+            };
+
+            const dismissUpdate = () => {
+                updateBannerVisible.value = false;
+                if (updateInfo.value.latest_version) {
+                    localStorage.setItem('forgefox_update_dismissed', updateInfo.value.latest_version);
+                }
+            };
+
+            const updateNow = async () => {
+                updateBannerVisible.value = false;
+                try {
+                    const res = await apiFetch('/api/update/run', { method: 'POST' });
+                    const data = await res.json().catch(() => ({}));
+                    if (res.ok && data.status === 'updating') {
+                        // Poll until the panel comes back with a newer version
+                        const deadline = Date.now() + 300000;
+                        const poll = setInterval(async () => {
+                            try {
+                                const r = await fetch('/api/update');
+                                if (r.ok) {
+                                    const info = await r.json();
+                                    if (info.current_version === updateInfo.value.latest_version) {
+                                        clearInterval(poll);
+                                        location.reload();
+                                    }
+                                }
+                            } catch (e) { /* still restarting */ }
+                            if (Date.now() > deadline) clearInterval(poll);
+                        }, 5000);
+                        confirmDialog.value = { title: 'Обновление запущено', text: 'Панель перезапустится сама. Страница обновится автоматически (до 5 минут).', action: () => { confirmDialog.value = null; } };
+                    } else {
+                        confirmDialog.value = { title: 'Не удалось обновить', text: data.error || ('HTTP ' + res.status), action: () => { confirmDialog.value = null; } };
+                    }
+                } catch (e) {
+                    confirmDialog.value = { title: 'Не удалось обновить', text: 'Нет соединения с панелью', action: () => { confirmDialog.value = null; } };
+                }
+            };
+
             onMounted(() => {
                 // Apply theme on load
                 document.documentElement.setAttribute('data-theme', currentTheme.value);
@@ -600,6 +857,7 @@
                     // Validate the stored token; 401 will kick back to the login screen
                     fetchStats();
                     renderChart();
+                    fetchUpdateInfo();
                 }
             });
 
@@ -608,7 +866,11 @@
                 currentTab, switchTab, stats, currentTheme, setTheme,
                 nodes, newNode, isAddingNode, nodeError, submitNode,
                 clients, newClient, isAddingClient, clientError, submitClient,
-                monitoring, logs
+                monitoring, logs,
+                editingNode, editNodeForm, editNodeError, isSavingNode, startEditNode, saveEditNode, checkNode,
+                confirmDialog, deleteNode, deleteClient,
+                qrSub, qrSubUrl, qrSrc, copySub, showQr,
+                updateInfo, updateBannerVisible, fetchUpdateInfo, dismissUpdate, updateNow
             };
         }
     }).mount('#app');
