@@ -53,6 +53,11 @@ fi
 log "Installing Provider Panel"
 log "  DB: $DB_TYPE  |  Port: $PORT  |  Admin: $ADMIN_USER"
 
+# Absolute install dir, resolved at RUN time: the generated docker-compose.yml
+# needs literal absolute paths in its volume mounts (a $INSTALL_DIR variable
+# inside it is read by docker compose as its own env var and comes up empty).
+REALDIR=$(cd "$INSTALL_DIR" && pwd)
+
 # ---- Base packages: a truly clean system may lack even curl/git ----------
 if ! command -v curl &>/dev/null || ! command -v git &>/dev/null; then
     log "Installing base packages (curl, git, ca-certificates)..."
@@ -169,9 +174,13 @@ services:
     volumes:
       # Self-update: the panel runs the host's update.sh and rebuilds itself
       # through the host's docker socket (see run_self_update in main.rs).
+      # Written absolute with the runtime INSTALL_DIR: docker compose reads
+      # this file from $INSTALL_DIR but a '$INSTALL_DIR' variable in it is
+      # NOT expanded (compose treats it as an env var, empty here) and the
+      # volume spec becomes ":/opt/forgefox-provider" — an invalid mount.
       - /var/run/docker.sock:/var/run/docker.sock
-      - $INSTALL_DIR/update.sh:/app/update.sh
-      - $INSTALL_DIR:/opt/forgefox-provider
+      - $REALDIR/update.sh:/app/update.sh
+      - $REALDIR:/opt/forgefox-provider
     depends_on:
       db:
         condition: service_healthy
@@ -193,10 +202,10 @@ services:
       - ADMIN_PASS=${ADMIN_PASS}
     volumes:
       - ./data:/app/data
-      # Self-update (same as the postgres compose above).
+      # Self-update (same as the postgres compose above), absolute paths.
       - /var/run/docker.sock:/var/run/docker.sock
-      - $INSTALL_DIR/update.sh:/app/update.sh
-      - $INSTALL_DIR:/opt/forgefox-provider
+      - $REALDIR/update.sh:/app/update.sh
+      - $REALDIR:/opt/forgefox-provider
 EOF
 fi
 
