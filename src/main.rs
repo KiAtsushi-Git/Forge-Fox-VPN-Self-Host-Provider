@@ -876,7 +876,13 @@ async fn get_update_info() -> Response {
                     let short = if latest.len() >= 7 { latest[..7].to_string() } else { latest.clone() };
                     let url = json["html_url"].as_str().unwrap_or_default().to_string();
                     let message = json["commit"]["message"].as_str().unwrap_or_default().lines().next().unwrap_or("").to_string();
-                    let update_available = !latest.is_empty() && !latest.starts_with(current.as_str()) && current != "unknown";
+                    // A build stamped with its commit is stale whenever the
+                    // tip of main differs. "unknown" means the image was
+                    // built without --build-arg (every install made before
+                    // that existed) — offer the update so those panels can
+                    // bootstrap themselves onto the stamped build.
+                    let update_available = !latest.is_empty()
+                        && (current == "unknown" || !latest.starts_with(current.as_str()));
                     UpdateInfo {
                         current_version: current,
                         latest_version: short,

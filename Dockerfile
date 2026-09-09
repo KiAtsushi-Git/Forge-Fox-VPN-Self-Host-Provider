@@ -5,6 +5,13 @@
 FROM rust:1-slim-bookworm AS builder
 WORKDIR /app
 
+# Commit the image was built from, passed as --build-arg by install.sh /
+# update.sh. The binary reads it at compile time (option_env!) and serves it
+# as the running version in /api/update — without it the panel always thinks
+# it is up to date ("unknown" == latest).
+ARG UPDATE_COMMIT=unknown
+ENV UPDATE_COMMIT=${UPDATE_COMMIT}
+
 # Cache dependencies: build with a dummy main first
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src && echo 'fn main() {}' > src/main.rs \

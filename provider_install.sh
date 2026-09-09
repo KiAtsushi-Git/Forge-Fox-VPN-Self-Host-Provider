@@ -107,7 +107,13 @@ cd "$INSTALL_DIR"
 log "Building the panel from source ($REPO_URL)..."
 rm -rf "$INSTALL_DIR/build"
 git clone --depth 1 "$REPO_URL" "$INSTALL_DIR/build" || die "git clone failed"
-docker build -t "$IMAGE" "$INSTALL_DIR/build" || die "docker build failed"
+# Stamp the commit into the image — /api/update compares it to the tip of main.
+UPDATE_COMMIT=$(git -C "$INSTALL_DIR/build" rev-parse HEAD)
+docker build --build-arg UPDATE_COMMIT="$UPDATE_COMMIT" -t "$IMAGE" "$INSTALL_DIR/build" || die "docker build failed"
+
+# update.sh is bind-mounted into the panel container for self-updates
+cp "$INSTALL_DIR/build/update.sh" "$INSTALL_DIR/update.sh"
+chmod +x "$INSTALL_DIR/update.sh"
 
 # ---- Compose config -------------------------------------------------------
 # Values are passed via .env (no fragile sed on special characters).
@@ -158,6 +164,12 @@ services:
       - DATABASE_URL=postgres://forgefox:forgefox@127.0.0.1:$PG_HOST_PORT/forgefox
       - ADMIN_USER=${ADMIN_USER}
       - ADMIN_PASS=${ADMIN_PASS}
+    volumes:
+      # Self-update: the panel runs the host's update.sh and rebuilds itself
+      # through the host's docker socket (see run_self_update in main.rs).
+      - /var/run/docker.sock:/var/run/docker.sock
+      - $INSTALL_DIR/update.sh:/app/update.sh
+      - $INSTALL_DIR:/opt/forgefox-provider
     depends_on:
       db:
         condition: service_healthy
@@ -179,6 +191,10 @@ services:
       - ADMIN_PASS=${ADMIN_PASS}
     volumes:
       - ./data:/app/data
+      # Self-update (same as the postgres compose above).
+      - /var/run/docker.sock:/var/run/docker.sock
+      - $INSTALL_DIR/update.sh:/app/update.sh
+      - $INSTALL_DIR:/opt/forgefox-provider
 EOF
 fi
 
