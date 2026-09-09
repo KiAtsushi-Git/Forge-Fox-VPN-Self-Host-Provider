@@ -834,7 +834,7 @@ async fn get_update_info() -> Response {
                     UpdateInfo {
                         current_version: current,
                         latest_version: short,
-                        update_available: !latest.is_empty() && !latest.starts_with(current.as_str()) && current != "unknown",
+                        update_available: !latest.is_empty() && !latest.starts_with(&current) && current != "unknown",
                         release_url: url,
                         release_notes: message,
                     }
