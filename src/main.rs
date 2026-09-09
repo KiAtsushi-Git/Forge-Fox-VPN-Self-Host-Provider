@@ -54,7 +54,7 @@ async fn get_dashboard(State(state): State<AppState>) -> Json<StatusResponse> {
 }
 
 async fn get_nodes(State(state): State<AppState>) -> Json<Vec<Node>> {
-    let nodes = sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes")
+    let nodes = sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, COALESCE(ssh_pass, '') AS ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes")
         .fetch_all(&state.db)
         .await
         .unwrap_or_default();
@@ -117,7 +117,7 @@ async fn add_node(State(state): State<AppState>, Json(payload): Json<NewNode>) -
             .into_response();
     }
 
-    let new_node = sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes WHERE id = $1")
+    let new_node = sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, COALESCE(ssh_pass, '') AS ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes WHERE id = $1")
         .bind(&id)
         .fetch_one(&state.db)
         .await;
@@ -136,7 +136,7 @@ async fn add_node(State(state): State<AppState>, Json(payload): Json<NewNode>) -
 }
 
 async fn get_clients(State(state): State<AppState>) -> Json<Vec<Client>> {
-    let clients = sqlx::query_as::<_, Client>("SELECT id, username, node_id, password, CAST(expiry AS TEXT) AS expiry, limit_gb, used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients")
+    let clients = sqlx::query_as::<_, Client>("SELECT id, username, node_id, COALESCE(node_ids, '') AS node_ids, COALESCE(password, '') AS password, CAST(expiry AS TEXT) AS expiry, limit_gb, used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients")
         .fetch_all(&state.db)
         .await
         .unwrap_or_default();
@@ -146,7 +146,9 @@ async fn get_clients(State(state): State<AppState>) -> Json<Vec<Client>> {
 #[derive(Deserialize)]
 struct NewClient {
     username: String,
-    node_id: String,
+    /// Old UI builds send a single node_id; new ones send node_ids[].
+    node_id: Option<String>,
+    node_ids: Option<Vec<String>>,
     /// Kept as a string: the dashboard's `datetime-local` input sends
     /// "YYYY-MM-DDTHH:MM" (no seconds), which chrono's NaiveDateTime
     /// deserializer rejects.
@@ -200,51 +202,91 @@ async fn add_client(
         None => None,
     };
 
-    // Find the node to provision the user on
-    let node = match sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes WHERE id = $1")
-        .bind(&payload.node_id)
-        .fetch_optional(&state.db)
-        .await
-    {
-        Ok(Some(n)) => n,
-        Ok(None) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "Нода не найдена" })),
-            )
-                .into_response()
+    // Resolve the target nodes: the new UI sends node_ids[], old builds
+    // send node_id. Deduplicate while keeping order.
+    let mut wanted: Vec<String> = payload.node_ids.clone().unwrap_or_default();
+    if let Some(single) = payload.node_id.as_deref().filter(|s| !s.is_empty()) {
+        if !wanted.iter().any(|w| w == single) {
+            wanted.push(single.to_string());
         }
-        Err(e) => {
-            tracing::error!("DB error fetching node: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "Ошибка БД" })),
-            )
-                .into_response()
-        }
-    };
-
-    // Create the user on the node via SSH
-    let password = gen_password(20);
-    if let Err(e) = provision_user_on_node(&node, &username, &password).await {
-        tracing::error!("Provisioning failed on node {}: {e}", node.name);
+    }
+    wanted.retain(|s| !s.is_empty());
+    if wanted.is_empty() {
         return (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({ "error": format!("Не удалось создать пользователя на ноде {}: {}", node.name, e) })),
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Выберите хотя бы одну ноду" })),
         )
             .into_response();
     }
 
+    // Load every requested node
+    let mut nodes: Vec<Node> = Vec::new();
+    for node_id in &wanted {
+        match sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, COALESCE(ssh_pass, '') AS ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes WHERE id = $1")
+            .bind(node_id)
+            .fetch_optional(&state.db)
+            .await
+        {
+            Ok(Some(n)) => nodes.push(n),
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": "Нода не найдена" })),
+                )
+                    .into_response()
+            }
+            Err(e) => {
+                tracing::error!("DB error fetching node: {e}");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "Ошибка БД" })),
+                )
+                    .into_response()
+            }
+        }
+    }
+
+    // Create the user on every node via SSH — one shared password so the
+    // subscription link works on whichever node the client connects to.
+    // On failure, roll back the users already created so a retry starts clean.
+    let password = gen_password(20);
+    let mut created_on: Vec<&Node> = Vec::new();
+    for node in &nodes {
+        if let Err(e) = provision_user_on_node(node, &username, &password).await {
+            tracing::error!("Provisioning failed on node {}: {e}", node.name);
+            for done in created_on {
+                let _ = run_node_command(
+                    done,
+                    &format!("id -u '{u}' >/dev/null 2>&1 && userdel -r '{u}' || true", u = username),
+                )
+                .await;
+            }
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": format!("Не удалось создать пользователя на ноде {}: {}", node.name, e) })),
+            )
+                .into_response();
+        }
+        created_on.push(node);
+    }
+
+    let node_ids_csv = wanted.join(",");
+    let primary_node_id = wanted[0].clone();
     let id = uuid::Uuid::new_v4().to_string();
+    // Bind expiry as a plain TEXT->TIMESTAMP cast that works on both backends.
+    // The old `CAST($5 AS TIMESTAMP)` broke on PostgreSQL: when expiry is
+    // None, sqlx types the NULL parameter as integer and Postgres rejects
+    // "cannot cast type integer to timestamp without time zone".
     if let Err(e) = sqlx::query(
-        "INSERT INTO clients (id, username, node_id, password, expiry, limit_gb, used_bytes) \
-         VALUES ($1, $2, $3, $4, CAST($5 AS TIMESTAMP), $6, 0)",
+        "INSERT INTO clients (id, username, node_id, node_ids, password, expiry, limit_gb, used_bytes) \
+         VALUES ($1, $2, $3, $7, $4, CAST(NULLIF($5, '') AS TIMESTAMP), $6, 0)",
     )
     .bind(&id)
     .bind(&username)
-    .bind(&payload.node_id)
+    .bind(&primary_node_id)
     .bind(&password)
-    .bind(expiry.map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string()))
+    .bind(&node_ids_csv)
+    .bind(expiry.map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string()).unwrap_or_default())
     .bind(payload.limit_gb)
     .execute(&state.db)
     .await
@@ -257,7 +299,7 @@ async fn add_client(
             .into_response();
     }
 
-    let new_client = sqlx::query_as::<_, Client>("SELECT id, username, node_id, password, CAST(expiry AS TEXT) AS expiry, limit_gb, used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients WHERE id = $1")
+    let new_client = sqlx::query_as::<_, Client>("SELECT id, username, node_id, COALESCE(node_ids, '') AS node_ids, COALESCE(password, '') AS password, CAST(expiry AS TEXT) AS expiry, limit_gb, used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients WHERE id = $1")
         .bind(&id)
         .fetch_one(&state.db)
         .await
@@ -473,7 +515,7 @@ async fn get_subscription(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Response {
-    let client = sqlx::query_as::<_, Client>("SELECT id, username, node_id, password, CAST(expiry AS TEXT) AS expiry, limit_gb, used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients WHERE id = $1")
+    let client = sqlx::query_as::<_, Client>("SELECT id, username, node_id, COALESCE(node_ids, '') AS node_ids, COALESCE(password, '') AS password, CAST(expiry AS TEXT) AS expiry, limit_gb, used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients WHERE id = $1")
         .bind(&id)
         .fetch_optional(&state.db)
         .await
@@ -484,28 +526,32 @@ async fn get_subscription(
         None => return (StatusCode::NOT_FOUND, "Client not found").into_response(),
     };
 
-    let node = sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes WHERE id = $1")
-        .bind(&client.node_id)
-        .fetch_optional(&state.db)
+    let nodes = sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, COALESCE(ssh_pass, '') AS ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes")
+        .fetch_all(&state.db)
         .await
-        .unwrap_or(None);
+        .unwrap_or_default();
 
-    let node = match node {
-        Some(n) => n,
-        None => return (StatusCode::NOT_FOUND, "Node not found").into_response(),
-    };
+    let wanted = client.all_node_ids();
+    let client_nodes: Vec<&Node> = nodes.iter().filter(|n| wanted.contains(&n.id)).collect();
+    if client_nodes.is_empty() {
+        return (StatusCode::NOT_FOUND, "Node not found").into_response();
+    }
 
     // Note: if provisioning failed the client was never stored, so the
-    // password here is the real one generated and set on the node.
-    let name = format!("{} ({})", node.name, client.username);
-    let body = format!(
-        "ssh://{}:{}@{}:{}#{}\n",
-        client.username,
-        client.password.as_deref().unwrap_or("generated_password_here"),
-        node.ip,
-        node.port,
-        encode_fragment(&name)
-    );
+    // password here is the real one generated and set on the node(s).
+    let mut body = String::new();
+    for node in client_nodes {
+        let name = format!("{} ({})", node.name, client.username);
+        body.push_str(&format!(
+            "ssh://{}:{}@{}:{}#{}
+",
+            client.username,
+            client.password.as_deref().unwrap_or("generated_password_here"),
+            node.ip,
+            node.port,
+            encode_fragment(&name)
+        ));
+    }
 
     (
         [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
@@ -562,7 +608,7 @@ async fn update_node(
     match res {
         Ok(r) if r.rows_affected() > 0 => {
             audit(&state, &format!("Нода {} обновлена", id)).await;
-            let node = sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes WHERE id = $1")
+            let node = sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, COALESCE(ssh_pass, '') AS ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes WHERE id = $1")
                 .bind(&id)
                 .fetch_one(&state.db)
                 .await;
@@ -594,7 +640,7 @@ async fn delete_node(State(state): State<AppState>, Path(id): Path<String>) -> R
 
 /// DELETE /api/clients/:id — remove a client and the SSH user from its node.
 async fn delete_client(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let client = match sqlx::query_as::<_, Client>("SELECT id, username, node_id, password, CAST(expiry AS TEXT) AS expiry, limit_gb, used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients WHERE id = $1")
+    let client = match sqlx::query_as::<_, Client>("SELECT id, username, node_id, COALESCE(node_ids, '') AS node_ids, COALESCE(password, '') AS password, CAST(expiry AS TEXT) AS expiry, limit_gb, used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients WHERE id = $1")
         .bind(&id)
         .fetch_optional(&state.db)
         .await
@@ -604,15 +650,14 @@ async fn delete_client(State(state): State<AppState>, Path(id): Path<String>) ->
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("БД: {e}") }))).into_response(),
     };
 
-    // Best-effort removal of the system user on the node
-    let node = sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes WHERE id = $1")
-        .bind(&client.node_id)
-        .fetch_optional(&state.db)
+    // Best-effort removal of the system user from every node it lives on
+    let all_nodes = sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, COALESCE(ssh_pass, '') AS ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes")
+        .fetch_all(&state.db)
         .await
-        .ok()
-        .flatten();
-    if let Some(node) = node {
-        let _ = run_node_command(&node, &format!("id -u '{}' >/dev/null 2>&1 && userdel -r '{}' || true", client.username, client.username)).await;
+        .unwrap_or_default();
+    let wanted = client.all_node_ids();
+    for node in all_nodes.iter().filter(|n| wanted.contains(&n.id)) {
+        let _ = run_node_command(node, &format!("id -u '{u}' >/dev/null 2>&1 && userdel -r '{u}' || true", u = client.username)).await;
     }
 
     match sqlx::query("DELETE FROM clients WHERE id = $1").bind(&id).execute(&state.db).await {
@@ -629,7 +674,7 @@ async fn delete_client(State(state): State<AppState>, Path(id): Path<String>) ->
 
 /// POST /api/nodes/:id/check — SSH into the node, update its status, return it.
 async fn check_node(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let node = match sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes WHERE id = $1")
+    let node = match sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, COALESCE(ssh_pass, '') AS ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes WHERE id = $1")
         .bind(&id)
         .fetch_optional(&state.db)
         .await
@@ -725,7 +770,7 @@ struct NodeMonitor {
 /// GET /api/monitoring — real CPU/RAM/traffic per node via SSH (one probe per
 /// node, all in parallel; nodes that fail SSH report online=false).
 async fn get_monitoring(State(state): State<AppState>) -> Response {
-    let nodes = sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes")
+    let nodes = sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, COALESCE(ssh_pass, '') AS ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes")
         .fetch_all(&state.db)
         .await
         .unwrap_or_default();

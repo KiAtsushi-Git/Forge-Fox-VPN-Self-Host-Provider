@@ -213,10 +213,10 @@
                     </div>
                     <div>
                         <label class="block text-sm text-slate-400 mb-1">Сервер (Нода)</label>
-                        <select v-model="newClient.node_id" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" required>
-                            <option disabled value="">Выберите сервер...</option>
+                        <select v-model="newClient.node_ids" multiple size="4" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" required>
                             <option v-for="n in nodes" :key="n.id" :value="n.id">{{ n.name }} ({{ n.ip }})</option>
                         </select>
+                        <div class="text-xs text-slate-500 mt-1">Ctrl/Shift+клик — выбрать несколько серверов</div>
                     </div>
                     <div>
                         <label class="block text-sm text-slate-400 mb-1">Лимит (GB)</label>
@@ -227,7 +227,7 @@
                         <input v-model="newClient.expiry" type="datetime-local" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white">
                     </div>
                     <div>
-                        <button type="submit" :disabled="isAddingClient || !newClient.node_id" class="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 px-4 rounded transition disabled:opacity-50">
+                        <button type="submit" :disabled="isAddingClient || !newClient.node_ids.length" class="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 px-4 rounded transition disabled:opacity-50">
                             {{ isAddingClient ? 'Создание...' : 'Создать' }}
                         </button>
                     </div>
@@ -252,7 +252,7 @@
                         <tr v-for="c in clients" :key="c.id" class="border-b border-slate-800 hover:bg-slate-800/50">
                             <td class="py-4 font-semibold">{{ c.username }}</td>
                             <td class="py-4 text-slate-300">
-                                {{ nodes.find(n => n.id === c.node_id)?.name || 'Неизвестно' }}
+                                {{ clientNodeNames(c) }}
                             </td>
                             <td class="py-4">
                                 {{ (c.used_bytes / 1024 / 1024 / 1024).toFixed(2) }} GB 
@@ -626,7 +626,7 @@
             };
 
             const clients = ref([]);
-            const newClient = ref({ username: '', node_id: '', expiry: null, limit_gb: null });
+            const newClient = ref({ username: '', node_ids: [], expiry: null, limit_gb: null });
             const isAddingClient = ref(false);
             const clientError = ref('');
 
@@ -637,20 +637,32 @@
                 } catch (e) { console.error(e); }
             };
 
+            const clientNodeNames = (c) => {
+                const ids = (c.node_ids || c.node_id || '').split(',').map(x => x.trim()).filter(Boolean);
+                const names = ids.map(id => {
+                    const n = nodes.value.find(n => n.id === id);
+                    return n ? n.name : null;
+                }).filter(Boolean);
+                return names.length ? names.join(', ') : 'Неизвестно';
+            };
+
             const submitClient = async () => {
                 isAddingClient.value = true;
                 clientError.value = '';
                 try {
+                    const payload = {
+                        ...newClient.value,
+                        node_ids: [...newClient.value.node_ids],
+                        node_id: newClient.value.node_ids[0] || '',
+                        limit_gb: newClient.value.limit_gb ? parseInt(newClient.value.limit_gb) : null
+                    };
                     const res = await apiFetch('/api/clients', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            ...newClient.value,
-                            limit_gb: newClient.value.limit_gb ? parseInt(newClient.value.limit_gb) : null
-                        })
+                        body: JSON.stringify(payload)
                     });
                     if (res.ok) {
-                        newClient.value = { username: '', node_id: '', expiry: null, limit_gb: null };
+                        newClient.value = { username: '', node_ids: [], expiry: null, limit_gb: null };
                         await fetchClients();
                         await fetchStats();
                     } else {
@@ -865,7 +877,7 @@
                 authToken, currentUser, loginForm, loginError, isLoggingIn, login, logout,
                 currentTab, switchTab, stats, currentTheme, setTheme,
                 nodes, newNode, isAddingNode, nodeError, submitNode,
-                clients, newClient, isAddingClient, clientError, submitClient,
+                clients, newClient, isAddingClient, clientError, submitClient, clientNodeNames,
                 monitoring, logs,
                 editingNode, editNodeForm, editNodeError, isSavingNode, startEditNode, saveEditNode, checkNode,
                 confirmDialog, deleteNode, deleteClient,
