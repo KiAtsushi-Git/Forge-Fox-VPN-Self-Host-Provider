@@ -176,13 +176,12 @@ services:
     volumes:
       # Self-update: the panel runs the host's update.sh and rebuilds itself
       # through the host's docker socket (see run_self_update in main.rs).
-      # Written absolute with the runtime INSTALL_DIR: docker compose reads
-      # this file from $INSTALL_DIR but a '$INSTALL_DIR' variable in it is
-      # NOT expanded (compose treats it as an env var, empty here) and the
-      # volume spec becomes ":/opt/forgefox-provider" — an invalid mount.
+      # REALDIR escapes as \$REALDIR so the shell expands it HERE (the running
+      # installer knows the install path) while docker compose never sees a
+      # variable — compose vars come from .env only and would be empty.
       - /var/run/docker.sock:/var/run/docker.sock
-      - $REALDIR/update.sh:/app/update.sh
-      - $REALDIR:/opt/forgefox-provider
+      - \$REALDIR/update.sh:/app/update.sh
+      - \$REALDIR:/opt/forgefox-provider
     depends_on:
       db:
         condition: service_healthy
@@ -204,11 +203,15 @@ services:
       - ADMIN_PASS=${ADMIN_PASS}
     volumes:
       - ./data:/app/data
-      # Self-update (same as the postgres compose above), absolute paths.
+      # Self-update (same as the postgres compose above). This heredoc is
+      # QUOTED ('EOF') so nothing expands — REALDIR is substituted with sed
+      # right after writing, keeping the compose free of shell variables.
       - /var/run/docker.sock:/var/run/docker.sock
-      - $REALDIR/update.sh:/app/update.sh
-      - $REALDIR:/opt/forgefox-provider
+      - @REALDIR@/update.sh:/app/update.sh
+      - @REALDIR@:/opt/forgefox-provider
 EOF
+    # Quoted heredoc above kept @REALDIR@ literal; expand it now.
+    sed -i "s|@REALDIR@|$REALDIR|g" docker-compose.yml
 fi
 
 # ---- Firewall -------------------------------------------------------------
