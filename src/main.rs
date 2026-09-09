@@ -1,4 +1,4 @@
-mod models;
+﻿mod models;
 
 use axum::{
     extract::{Path, Request, State},
@@ -19,7 +19,7 @@ use models::{Node, Client};
 
 const SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const SSH_PROVISION_TIMEOUT: Duration = Duration::from_secs(30);
-/// install.sh compiles the TUN bridge on the node — that takes minutes on
+/// install.sh compiles the TUN bridge on the node вЂ” that takes minutes on
 /// slow VPSes, so the node-setup run gets a much longer budget than the
 /// quick provisioning/monitoring SSH calls.
 const SSH_SETUP_TIMEOUT: Duration = Duration::from_secs(600);
@@ -72,7 +72,7 @@ async fn get_nodes(State(state): State<AppState>) -> Json<Vec<Node>> {
 
 // Payloads for the create endpoints. They must NOT reuse the persisted models:
 // `Node`/`Client` derive Deserialize with a required `id`, and the dashboard
-// form has no id to send — axum answered every POST with a 422 that the UI
+// form has no id to send вЂ” axum answered every POST with a 422 that the UI
 // silently swallowed.
 
 #[derive(Deserialize)]
@@ -90,7 +90,7 @@ async fn add_node(State(state): State<AppState>, Json(payload): Json<NewNode>) -
     if name.is_empty() || ip.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Укажите название и IP ноды" })),
+            Json(serde_json::json!({ "error": "РЈРєР°Р¶РёС‚Рµ РЅР°Р·РІР°РЅРёРµ Рё IP РЅРѕРґС‹" })),
         )
             .into_response();
     }
@@ -104,8 +104,10 @@ async fn add_node(State(state): State<AppState>, Json(payload): Json<NewNode>) -
         .unwrap_or_else(|| "root".to_string());
 
     let id = uuid::Uuid::new_v4().to_string();
+    // CAST(port): the Any driver binds by the first parameter type (TEXT id),
+    // so on SQLite port would land as TEXT and INTEGER decoding would panic.
     let insert = sqlx::query(
-        "INSERT INTO nodes (id, name, ip, port, ssh_user, ssh_pass, status) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "INSERT INTO nodes (id, name, ip, port, ssh_user, ssh_pass, status) VALUES ($1, $2, $3, CAST($4 AS INTEGER), $5, $6, $7)",
     )
     .bind(&id)
     .bind(&name)
@@ -121,7 +123,7 @@ async fn add_node(State(state): State<AppState>, Json(payload): Json<NewNode>) -
         tracing::error!("Failed to insert node: {e}");
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Ошибка БД при сохранении ноды" })),
+            Json(serde_json::json!({ "error": "РћС€РёР±РєР° Р‘Р” РїСЂРё СЃРѕС…СЂР°РЅРµРЅРёРё РЅРѕРґС‹" })),
         )
             .into_response();
     }
@@ -137,7 +139,7 @@ async fn add_node(State(state): State<AppState>, Json(payload): Json<NewNode>) -
             tracing::error!("Failed to re-read node: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "Ошибка БД при чтении ноды" })),
+                Json(serde_json::json!({ "error": "РћС€РёР±РєР° Р‘Р” РїСЂРё С‡С‚РµРЅРёРё РЅРѕРґС‹" })),
             )
                 .into_response()
         }
@@ -145,7 +147,7 @@ async fn add_node(State(state): State<AppState>, Json(payload): Json<NewNode>) -
 }
 
 async fn get_clients(State(state): State<AppState>) -> Json<Vec<Client>> {
-    let clients = sqlx::query_as::<_, Client>("SELECT id, username, node_id, COALESCE(node_ids, '') AS node_ids, COALESCE(password, '') AS password, CAST(expiry AS TEXT) AS expiry, limit_gb, used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients")
+    let clients = sqlx::query_as::<_, Client>("SELECT id, username, node_id, COALESCE(node_ids, '') AS node_ids, COALESCE(password, '') AS password, CAST(expiry AS TEXT) AS expiry, COALESCE(CAST(limit_gb AS INTEGER), 0) AS limit_gb, COALESCE(CAST(used_bytes AS INTEGER), 0) AS used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients")
         .fetch_all(&state.db)
         .await
         .unwrap_or_default();
@@ -177,14 +179,14 @@ fn parse_expiry(raw: &str) -> Result<Option<chrono::NaiveDateTime>, String> {
             return Ok(Some(dt));
         }
     }
-    Err(format!("Не удалось разобрать дату: {raw} (ожидается ГГГГ-ММ-ДД ЧЧ:ММ)"))
+    Err(format!("РќРµ СѓРґР°Р»РѕСЃСЊ СЂР°Р·РѕР±СЂР°С‚СЊ РґР°С‚Сѓ: {raw} (РѕР¶РёРґР°РµС‚СЃСЏ Р“Р“Р“Р“-РњРњ-Р”Р” Р§Р§:РњРњ)"))
 }
 
 async fn add_client(
     State(state): State<AppState>,
     Json(payload): Json<NewClient>,
 ) -> Response {
-    // The username becomes a system SSH user on the node — validate it strictly
+    // The username becomes a system SSH user on the node вЂ” validate it strictly
     let username = payload.username.trim().to_string();
     let valid = !username.is_empty()
         && username.len() <= 32
@@ -194,7 +196,7 @@ async fn add_client(
     if !valid {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Имя пользователя: 1-32 символа, только латиница, цифры, - и _" })),
+            Json(serde_json::json!({ "error": "РРјСЏ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ: 1-32 СЃРёРјРІРѕР»Р°, С‚РѕР»СЊРєРѕ Р»Р°С‚РёРЅРёС†Р°, С†РёС„СЂС‹, - Рё _" })),
         )
             .into_response();
     }
@@ -223,7 +225,7 @@ async fn add_client(
     if wanted.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Выберите хотя бы одну ноду" })),
+            Json(serde_json::json!({ "error": "Р’С‹Р±РµСЂРёС‚Рµ С…РѕС‚СЏ Р±С‹ РѕРґРЅСѓ РЅРѕРґСѓ" })),
         )
             .into_response();
     }
@@ -240,7 +242,7 @@ async fn add_client(
             Ok(None) => {
                 return (
                     StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": "Нода не найдена" })),
+                    Json(serde_json::json!({ "error": "РќРѕРґР° РЅРµ РЅР°Р№РґРµРЅР°" })),
                 )
                     .into_response()
             }
@@ -248,14 +250,14 @@ async fn add_client(
                 tracing::error!("DB error fetching node: {e}");
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": "Ошибка БД" })),
+                    Json(serde_json::json!({ "error": "РћС€РёР±РєР° Р‘Р”" })),
                 )
                     .into_response()
             }
         }
     }
 
-    // Create the user on every node via SSH — one shared password so the
+    // Create the user on every node via SSH вЂ” one shared password so the
     // subscription link works on whichever node the client connects to.
     // On failure, roll back the users already created so a retry starts clean.
     let password = gen_password(20);
@@ -272,7 +274,7 @@ async fn add_client(
             }
             return (
                 StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({ "error": format!("Не удалось создать пользователя на ноде {}: {}", node.name, e) })),
+                Json(serde_json::json!({ "error": format!("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РЅР° РЅРѕРґРµ {}: {}", node.name, e) })),
             )
                 .into_response();
         }
@@ -282,13 +284,15 @@ async fn add_client(
     let node_ids_csv = wanted.join(",");
     let primary_node_id = wanted[0].clone();
     let id = uuid::Uuid::new_v4().to_string();
-    // Bind expiry as a plain TEXT->TIMESTAMP cast that works on both backends.
-    // The old `CAST($5 AS TIMESTAMP)` broke on PostgreSQL: when expiry is
-    // None, sqlx types the NULL parameter as integer and Postgres rejects
-    // "cannot cast type integer to timestamp without time zone".
+    // The Any driver binds by the FIRST parameter's type — TEXT here — so on
+    // SQLite every bind lands as TEXT (limit_gb '', expiry ''). PostgreSQL is
+    // stricter the other way (NULL typed as integer). Cast every column on
+    // the SQL side so both backends store properly typed values:
+    //   expiry: '' -> NULL, else TIMESTAMP
+    //   limit_gb: '' -> NULL, else INTEGER
     if let Err(e) = sqlx::query(
         "INSERT INTO clients (id, username, node_id, node_ids, password, expiry, limit_gb, used_bytes) \
-         VALUES ($1, $2, $3, $7, $4, CAST(NULLIF($5, '') AS TIMESTAMP), $6, 0)",
+         VALUES ($1, $2, $3, $7, $4, CAST(NULLIF($5, '') AS TIMESTAMP), CAST(NULLIF($6, '') AS INTEGER), 0)",
     )
     .bind(&id)
     .bind(&username)
@@ -296,28 +300,33 @@ async fn add_client(
     .bind(&password)
     .bind(&node_ids_csv)
     .bind(expiry.map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string()).unwrap_or_default())
-    .bind(payload.limit_gb)
+    .bind(payload.limit_gb.map(|gb| gb.to_string()).unwrap_or_default())
     .execute(&state.db)
     .await
     {
         tracing::error!("Failed to insert client: {e}");
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Ошибка БД при сохранении клиента" })),
+            Json(serde_json::json!({ "error": "РћС€РёР±РєР° Р‘Р” РїСЂРё СЃРѕС…СЂР°РЅРµРЅРёРё РєР»РёРµРЅС‚Р°" })),
         )
             .into_response();
     }
 
-    let new_client = sqlx::query_as::<_, Client>("SELECT id, username, node_id, COALESCE(node_ids, '') AS node_ids, COALESCE(password, '') AS password, CAST(expiry AS TEXT) AS expiry, limit_gb, used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients WHERE id = $1")
+    let new_client = sqlx::query_as::<_, Client>("SELECT id, username, node_id, COALESCE(node_ids, '') AS node_ids, COALESCE(password, '') AS password, CAST(expiry AS TEXT) AS expiry, COALESCE(CAST(limit_gb AS INTEGER), 0) AS limit_gb, COALESCE(CAST(used_bytes AS INTEGER), 0) AS used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients WHERE id = $1")
         .bind(&id)
         .fetch_one(&state.db)
-        .await
-        .unwrap();
-
-    Json(new_client).into_response()
+        .await;
+    match new_client {
+        Ok(c) => Json(c).into_response(),
+        Err(e) => {
+            // The row IS inserted — report it as such, not as a lost request.
+            tracing::error!("Failed to re-read client: {e}");
+            Json(serde_json::json!({ "id": id, "username": username, "node_id": primary_node_id, "node_ids": node_ids_csv })).into_response()
+        }
+    }
 }
 
-// ── Node provisioning (SSH) ─────────────────────────────────────────────────
+// в”Ђв”Ђ Node provisioning (SSH) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 /// Random password from an unambiguous alphanumeric set.
 fn gen_password(len: usize) -> String {
@@ -351,7 +360,7 @@ async fn provision_user_on_node(node: &Node, username: &str, password: &str) -> 
     let ssh_pass = node
         .ssh_pass
         .as_deref()
-        .ok_or_else(|| "у ноды не задан SSH пароль".to_string())?;
+        .ok_or_else(|| "Сѓ РЅРѕРґС‹ РЅРµ Р·Р°РґР°РЅ SSH РїР°СЂРѕР»СЊ".to_string())?;
 
     let fut = async {
         let config = Arc::new(russh::client::Config::default());
@@ -368,7 +377,7 @@ async fn provision_user_on_node(node: &Node, username: &str, password: &str) -> 
             .await
             .map_err(|e| format!("SSH auth: {e}"))?;
         if !authed {
-            return Err("SSH auth: неверный логин/пароль ноды".to_string());
+            return Err("SSH auth: РЅРµРІРµСЂРЅС‹Р№ Р»РѕРіРёРЅ/РїР°СЂРѕР»СЊ РЅРѕРґС‹".to_string());
         }
 
         // username is validated (alnum/-/_) and the password is generated
@@ -417,17 +426,17 @@ echo PROVISION_OK"#,
             return Err(format!("exit code {exit_code}: {output}"));
         }
         if !output.contains("PROVISION_OK") {
-            return Err(format!("неожиданный ответ: {output}"));
+            return Err(format!("РЅРµРѕР¶РёРґР°РЅРЅС‹Р№ РѕС‚РІРµС‚: {output}"));
         }
         Ok(())
     };
 
     tokio::time::timeout(SSH_PROVISION_TIMEOUT, fut)
         .await
-        .map_err(|_| "таймаут SSH".to_string())?
+        .map_err(|_| "С‚Р°Р№РјР°СѓС‚ SSH".to_string())?
 }
 
-// ── Auth ─────────────────────────────────────────────────────────────────────
+// в”Ђв”Ђ Auth в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 #[derive(Deserialize)]
 struct LoginRequest {
@@ -441,7 +450,7 @@ struct LoginResponse {
     username: String,
 }
 
-/// POST /api/login — issue a session token for valid credentials.
+/// POST /api/login вЂ” issue a session token for valid credentials.
 async fn login(State(state): State<AppState>, Json(payload): Json<LoginRequest>) -> Response {
     let admin: Option<(String, String)> =
         sqlx::query_as("SELECT username, password_hash FROM admins WHERE username = $1")
@@ -459,7 +468,7 @@ async fn login(State(state): State<AppState>, Json(payload): Json<LoginRequest>)
         tracing::warn!("Failed login attempt for user '{}'", payload.username);
         return (
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "Неверный логин или пароль" })),
+            Json(serde_json::json!({ "error": "РќРµРІРµСЂРЅС‹Р№ Р»РѕРіРёРЅ РёР»Рё РїР°СЂРѕР»СЊ" })),
         )
             .into_response();
     }
@@ -504,7 +513,7 @@ async fn auth_middleware(
     }
 }
 
-// ── Subscription (public, consumed by VPN clients) ──────────────────────────
+// в”Ђв”Ђ Subscription (public, consumed by VPN clients) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 /// Percent-encode a URI fragment component (server names may contain spaces etc.)
 fn encode_fragment(s: &str) -> String {
@@ -518,13 +527,13 @@ fn encode_fragment(s: &str) -> String {
     out
 }
 
-/// GET /sub/:id — plain-text subscription in `ssh://user:pass@host:port#name`
+/// GET /sub/:id вЂ” plain-text subscription in `ssh://user:pass@host:port#name`
 /// format (the format the ForgeFox desktop and Android clients parse).
 async fn get_subscription(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Response {
-    let client = sqlx::query_as::<_, Client>("SELECT id, username, node_id, COALESCE(node_ids, '') AS node_ids, COALESCE(password, '') AS password, CAST(expiry AS TEXT) AS expiry, limit_gb, used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients WHERE id = $1")
+    let client = sqlx::query_as::<_, Client>("SELECT id, username, node_id, COALESCE(node_ids, '') AS node_ids, COALESCE(password, '') AS password, CAST(expiry AS TEXT) AS expiry, COALESCE(CAST(limit_gb AS INTEGER), 0) AS limit_gb, COALESCE(CAST(used_bytes AS INTEGER), 0) AS used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients WHERE id = $1")
         .bind(&id)
         .fetch_optional(&state.db)
         .await
@@ -571,7 +580,7 @@ async fn get_subscription(
 
 
 
-// ── Node / Client management (edit, delete) ─────────────────────────────────
+// в”Ђв”Ђ Node / Client management (edit, delete) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 #[derive(Deserialize)]
 struct NodeUpdate {
@@ -582,7 +591,7 @@ struct NodeUpdate {
     ssh_pass: Option<String>,
 }
 
-/// PUT /api/nodes/:id — update editable node fields (None = keep current).
+/// PUT /api/nodes/:id вЂ” update editable node fields (None = keep current).
 async fn update_node(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -592,7 +601,7 @@ async fn update_node(
     let ip = payload.ip.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     if let Some(p) = payload.port {
         if !(1..=65535).contains(&p) {
-            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Порт должен быть 1-65535" }))).into_response();
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "РџРѕСЂС‚ РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ 1-65535" }))).into_response();
         }
     }
 
@@ -600,7 +609,7 @@ async fn update_node(
         "UPDATE nodes SET \
          name = COALESCE($1, name), \
          ip = COALESCE($2, ip), \
-         port = COALESCE($3, port), \
+         port = COALESCE(CAST($3 AS INTEGER), port), \
          ssh_user = COALESCE($4, ssh_user), \
          ssh_pass = COALESCE($5, ssh_pass) \
          WHERE id = $6",
@@ -616,22 +625,22 @@ async fn update_node(
 
     match res {
         Ok(r) if r.rows_affected() > 0 => {
-            audit(&state, &format!("Нода {} обновлена", id)).await;
+            audit(&state, &format!("РќРѕРґР° {} РѕР±РЅРѕРІР»РµРЅР°", id)).await;
             let node = sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, COALESCE(ssh_pass, '') AS ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes WHERE id = $1")
                 .bind(&id)
                 .fetch_one(&state.db)
                 .await;
             match node {
                 Ok(n) => Json(n).into_response(),
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("БД: {e}") }))).into_response(),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Р‘Р”: {e}") }))).into_response(),
             }
         }
-        Ok(_) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Нода не найдена" }))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("БД: {e}") }))).into_response(),
+        Ok(_) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "РќРѕРґР° РЅРµ РЅР°Р№РґРµРЅР°" }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Р‘Р”: {e}") }))).into_response(),
     }
 }
 
-/// DELETE /api/nodes/:id — remove a node and its clients (cascade).
+/// DELETE /api/nodes/:id вЂ” remove a node and its clients (cascade).
 async fn delete_node(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let res = sqlx::query("DELETE FROM nodes WHERE id = $1")
         .bind(&id)
@@ -639,24 +648,24 @@ async fn delete_node(State(state): State<AppState>, Path(id): Path<String>) -> R
         .await;
     match res {
         Ok(r) if r.rows_affected() > 0 => {
-            audit(&state, &format!("Нода {} удалена", id)).await;
+            audit(&state, &format!("РќРѕРґР° {} СѓРґР°Р»РµРЅР°", id)).await;
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(_) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Нода не найдена" }))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("БД: {e}") }))).into_response(),
+        Ok(_) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "РќРѕРґР° РЅРµ РЅР°Р№РґРµРЅР°" }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Р‘Р”: {e}") }))).into_response(),
     }
 }
 
-/// DELETE /api/clients/:id — remove a client and the SSH user from its node.
+/// DELETE /api/clients/:id вЂ” remove a client and the SSH user from its node.
 async fn delete_client(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let client = match sqlx::query_as::<_, Client>("SELECT id, username, node_id, COALESCE(node_ids, '') AS node_ids, COALESCE(password, '') AS password, CAST(expiry AS TEXT) AS expiry, limit_gb, used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients WHERE id = $1")
+    let client = match sqlx::query_as::<_, Client>("SELECT id, username, node_id, COALESCE(node_ids, '') AS node_ids, COALESCE(password, '') AS password, CAST(expiry AS TEXT) AS expiry, COALESCE(CAST(limit_gb AS INTEGER), 0) AS limit_gb, COALESCE(CAST(used_bytes AS INTEGER), 0) AS used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients WHERE id = $1")
         .bind(&id)
         .fetch_optional(&state.db)
         .await
     {
         Ok(Some(c)) => c,
-        Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Клиент не найден" }))).into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("БД: {e}") }))).into_response(),
+        Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "РљР»РёРµРЅС‚ РЅРµ РЅР°Р№РґРµРЅ" }))).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Р‘Р”: {e}") }))).into_response(),
     };
 
     // Best-effort removal of the system user from every node it lives on
@@ -671,17 +680,17 @@ async fn delete_client(State(state): State<AppState>, Path(id): Path<String>) ->
 
     match sqlx::query("DELETE FROM clients WHERE id = $1").bind(&id).execute(&state.db).await {
         Ok(r) if r.rows_affected() > 0 => {
-            audit(&state, &format!("Клиент {} удалён", client.username)).await;
+            audit(&state, &format!("РљР»РёРµРЅС‚ {} СѓРґР°Р»С‘РЅ", client.username)).await;
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(_) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Клиент не найден" }))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("БД: {e}") }))).into_response(),
+        Ok(_) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "РљР»РёРµРЅС‚ РЅРµ РЅР°Р№РґРµРЅ" }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Р‘Р”: {e}") }))).into_response(),
     }
 }
 
-// ── Node health check ───────────────────────────────────────────────────────
+// в”Ђв”Ђ Node health check в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
-/// POST /api/nodes/:id/check — SSH into the node, update its status, return it.
+/// POST /api/nodes/:id/check вЂ” SSH into the node, update its status, return it.
 async fn check_node(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let node = match sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, COALESCE(ssh_pass, '') AS ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes WHERE id = $1")
         .bind(&id)
@@ -689,8 +698,8 @@ async fn check_node(State(state): State<AppState>, Path(id): Path<String>) -> Re
         .await
     {
         Ok(Some(n)) => n,
-        Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Нода не найдена" }))).into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("БД: {e}") }))).into_response(),
+        Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "РќРѕРґР° РЅРµ РЅР°Р№РґРµРЅР°" }))).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Р‘Р”: {e}") }))).into_response(),
     };
 
     let status = match run_node_command(&node, "echo OK").await {
@@ -709,7 +718,7 @@ async fn check_node(State(state): State<AppState>, Path(id): Path<String>) -> Re
     Json(serde_json::json!({ "id": id, "status": status })).into_response()
 }
 
-// ── SSH command runner ──────────────────────────────────────────────────────
+// в”Ђв”Ђ SSH command runner в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 /// Run `command` on the node via SSH and return its stdout.
 /// Shared by the health check, monitoring and user deletion.
@@ -717,7 +726,7 @@ async fn run_node_command(node: &Node, command: &str) -> Result<String, String> 
     let ssh_pass = node
         .ssh_pass
         .as_deref()
-        .ok_or_else(|| "у ноды не задан SSH пароль".to_string())?;
+        .ok_or_else(|| "Сѓ РЅРѕРґС‹ РЅРµ Р·Р°РґР°РЅ SSH РїР°СЂРѕР»СЊ".to_string())?;
 
     let fut = async {
         let config = Arc::new(russh::client::Config::default());
@@ -734,7 +743,7 @@ async fn run_node_command(node: &Node, command: &str) -> Result<String, String> 
             .await
             .map_err(|e| format!("SSH auth: {e}"))?;
         if !authed {
-            return Err("SSH auth: неверный логин/пароль ноды".to_string());
+            return Err("SSH auth: РЅРµРІРµСЂРЅС‹Р№ Р»РѕРіРёРЅ/РїР°СЂРѕР»СЊ РЅРѕРґС‹".to_string());
         }
 
         let mut channel = session
@@ -760,10 +769,10 @@ async fn run_node_command(node: &Node, command: &str) -> Result<String, String> 
 
     tokio::time::timeout(SSH_PROVISION_TIMEOUT, fut)
         .await
-        .map_err(|_| "таймаут SSH".to_string())?
+        .map_err(|_| "С‚Р°Р№РјР°СѓС‚ SSH".to_string())?
 }
 
-// ── Real monitoring over SSH ────────────────────────────────────────────────
+// в”Ђв”Ђ Real monitoring over SSH в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 #[derive(Serialize)]
 struct NodeMonitor {
@@ -776,7 +785,7 @@ struct NodeMonitor {
     online: bool,
 }
 
-/// GET /api/monitoring — real CPU/RAM/traffic per node via SSH (one probe per
+/// GET /api/monitoring вЂ” real CPU/RAM/traffic per node via SSH (one probe per
 /// node, all in parallel; nodes that fail SSH report online=false).
 async fn get_monitoring(State(state): State<AppState>) -> Response {
     let nodes = sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, COALESCE(ssh_pass, '') AS ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes")
@@ -784,7 +793,7 @@ async fn get_monitoring(State(state): State<AppState>) -> Response {
         .await
         .unwrap_or_default();
 
-    // CPU%, MemAvailable MB, MemTotal MB, rx bytes, tx bytes — one line, space-separated
+    // CPU%, MemAvailable MB, MemTotal MB, rx bytes, tx bytes вЂ” one line, space-separated
     let cmd = "echo \"$((100 - $(top -bn1 | grep 'Cpu(s)' | awk '{print int($8)}'))) $(grep MemAvailable /proc/meminfo | awk '{print int($2/1024)}') $(grep MemTotal /proc/meminfo | awk '{print int($2/1024)}') $(cat /proc/net/dev | awk '/:/{sub(/:/,\"\"); if ($1 != \"lo\") {rx+=$2; tx+=$10}} END {print rx, tx}')\"";
 
     let probes: Vec<_> = nodes
@@ -840,7 +849,7 @@ async fn get_monitoring(State(state): State<AppState>) -> Response {
     Json(stats).into_response()
 }
 
-// ── Update check (GitHub Releases) ──────────────────────────────────────────
+// в”Ђв”Ђ Update check (GitHub Releases) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 #[derive(Serialize)]
 struct UpdateInfo {
@@ -861,7 +870,7 @@ fn update_info_unavailable(reason: String) -> UpdateInfo {
     }
 }
 
-/// GET /api/update — compare the running build's commit against the tip of
+/// GET /api/update вЂ” compare the running build's commit against the tip of
 /// main on GitHub. The update flow ships commits (no releases), so the commit
 /// SHA is the version: the build stamps it via the UPDATE_COMMIT env var
 /// (install.sh / update.sh pass it to docker build), and any change on main
@@ -888,7 +897,7 @@ async fn get_update_info() -> Response {
                     // A build stamped with its commit is stale whenever the
                     // tip of main differs. "unknown" means the image was
                     // built without --build-arg (every install made before
-                    // that existed) — offer the update so those panels can
+                    // that existed) вЂ” offer the update so those panels can
                     // bootstrap themselves onto the stamped build.
                     let update_available = !latest.is_empty()
                         && (current == "unknown" || !latest.starts_with(current.as_str()));
@@ -900,22 +909,22 @@ async fn get_update_info() -> Response {
                         release_notes: message,
                     }
                 }
-                Err(e) => update_info_unavailable(format!("не удалось разобрать ответ: {e}")),
+                Err(e) => update_info_unavailable(format!("РЅРµ СѓРґР°Р»РѕСЃСЊ СЂР°Р·РѕР±СЂР°С‚СЊ РѕС‚РІРµС‚: {e}")),
             },
-            Ok(resp) => update_info_unavailable(format!("GitHub ответил HTTP {}", resp.status())),
-            Err(e) => update_info_unavailable(format!("нет соединения с GitHub: {e}")),
+            Ok(resp) => update_info_unavailable(format!("GitHub РѕС‚РІРµС‚РёР» HTTP {}", resp.status())),
+            Err(e) => update_info_unavailable(format!("РЅРµС‚ СЃРѕРµРґРёРЅРµРЅРёСЏ СЃ GitHub: {e}")),
         },
-        Err(_) => update_info_unavailable("HTTP-клиент недоступен".into()),
+        Err(_) => update_info_unavailable("HTTP-РєР»РёРµРЅС‚ РЅРµРґРѕСЃС‚СѓРїРµРЅ".into()),
     };
     Json(info).into_response()
 }
 
-// ── Self-update (POST /api/update/run) ──────────────────────────────────────
+// в”Ђв”Ђ Self-update (POST /api/update/run) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 //
 // The panel container runs with /var/run/docker.sock mounted (see install.sh
 // docker-compose) and /opt/forgefox-provider/update.sh bind-mounted from the
 // host. The endpoint spawns that script detached (nohup, output to a log file
-// on the host) and returns immediately — the script re-pulls/rebuilds the
+// on the host) and returns immediately вЂ” the script re-pulls/rebuilds the
 // image and recreates this container, which severs the connection. The UI
 // polls /api/update until the new version answers.
 
@@ -925,7 +934,7 @@ async fn run_self_update() -> Response {
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({
-                "error": "Скрипт обновления не найден. Панель установлена старой версией install.sh — обновите вручную: curl -Ls https://raw.githubusercontent.com/KiAtsushi-Git/Forge-Fox-VPN-Self-Host-Provider/main/install.sh | bash"
+                "error": "РЎРєСЂРёРїС‚ РѕР±РЅРѕРІР»РµРЅРёСЏ РЅРµ РЅР°Р№РґРµРЅ. РџР°РЅРµР»СЊ СѓСЃС‚Р°РЅРѕРІР»РµРЅР° СЃС‚Р°СЂРѕР№ РІРµСЂСЃРёРµР№ install.sh вЂ” РѕР±РЅРѕРІРёС‚Рµ РІСЂСѓС‡РЅСѓСЋ: curl -Ls https://raw.githubusercontent.com/KiAtsushi-Git/Forge-Fox-VPN-Self-Host-Provider/main/install.sh | bash"
             })),
         ).into_response();
     }
@@ -940,12 +949,12 @@ async fn run_self_update() -> Response {
         Ok(_) => Json(serde_json::json!({ "status": "updating" })).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("не удалось запустить обновление: {e}") })),
+            Json(serde_json::json!({ "error": format!("РЅРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РїСѓСЃС‚РёС‚СЊ РѕР±РЅРѕРІР»РµРЅРёРµ: {e}") })),
         ).into_response(),
     }
 }
 
-// ── Audit log (real) ────────────────────────────────────────────────────────
+// в”Ђв”Ђ Audit log (real) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 async fn audit(state: &AppState, action: &str) {
     let time = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -970,7 +979,7 @@ async fn get_logs(State(state): State<AppState>) -> Response {
     Json(rows).into_response()
 }
 
-// ── Startup ──────────────────────────────────────────────────────────────────
+// в”Ђв”Ђ Startup в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 /// Sync admin credentials from the environment (set by install.sh via
 /// `--user` / `--pass`) into the admins table, so the credentials used at
@@ -999,7 +1008,7 @@ async fn main() {
     tracing::info!("Starting ForgeFox VPN Provider...");
 
     // Connect to the database. DATABASE_URL decides the backend:
-    // "postgres://..." → PostgreSQL, anything else ("sqlite://..." or empty) → SQLite.
+    // "postgres://..." в†’ PostgreSQL, anything else ("sqlite://..." or empty) в†’ SQLite.
     // install.sh passes the URL matching the --db choice (postgres|sqlite).
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://forgefox.db?mode=rwc".to_string());
     sqlx::any::install_default_drivers();
