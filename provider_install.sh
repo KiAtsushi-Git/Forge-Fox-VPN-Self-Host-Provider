@@ -137,6 +137,8 @@ services:
       POSTGRES_DB: forgefox
     volumes:
       - forgefox_db_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
 
   forgefox-panel:
     image: ${IMAGE}
