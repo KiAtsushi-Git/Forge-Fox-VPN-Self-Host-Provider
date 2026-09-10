@@ -146,12 +146,24 @@ async fn add_node(State(state): State<AppState>, Json(payload): Json<NewNode>) -
     }
 }
 
-async fn get_clients(State(state): State<AppState>) -> Json<Vec<Client>> {
-    let clients = sqlx::query_as::<_, Client>("SELECT id, username, node_id, COALESCE(node_ids, '') AS node_ids, COALESCE(password, '') AS password, CAST(expiry AS TEXT) AS expiry, COALESCE(CAST(limit_gb AS INTEGER), 0) AS limit_gb, COALESCE(CAST(used_bytes AS INTEGER), 0) AS used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients")
+async fn get_clients(State(state): State<AppState>) -> Response {
+    // Old code swallowed decode errors via unwrap_or_default() — one bad row
+    // (expiry stored as integer 0 by the pre-CAST INSERT) made the whole
+    // list come back empty, looking like "users vanish after creation".
+    let clients = sqlx::query_as::<_, Client>("SELECT id, username, node_id, COALESCE(node_ids, '') AS node_ids, COALESCE(password, '') AS password, COALESCE(CAST(expiry AS TEXT), '') AS expiry, COALESCE(CAST(limit_gb AS INTEGER), 0) AS limit_gb, COALESCE(CAST(used_bytes AS INTEGER), 0) AS used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients")
         .fetch_all(&state.db)
-        .await
-        .unwrap_or_default();
-    Json(clients)
+        .await;
+    match clients {
+        Ok(c) => Json(c).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to list clients: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("Ошибка чтения клиентов: {e}") })),
+            )
+                .into_response()
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -312,7 +324,7 @@ async fn add_client(
             .into_response();
     }
 
-    let new_client = sqlx::query_as::<_, Client>("SELECT id, username, node_id, COALESCE(node_ids, '') AS node_ids, COALESCE(password, '') AS password, CAST(expiry AS TEXT) AS expiry, COALESCE(CAST(limit_gb AS INTEGER), 0) AS limit_gb, COALESCE(CAST(used_bytes AS INTEGER), 0) AS used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients WHERE id = $1")
+    let new_client = sqlx::query_as::<_, Client>("SELECT id, username, node_id, COALESCE(node_ids, '') AS node_ids, COALESCE(password, '') AS password, COALESCE(CAST(expiry AS TEXT), '') AS expiry, COALESCE(CAST(limit_gb AS INTEGER), 0) AS limit_gb, COALESCE(CAST(used_bytes AS INTEGER), 0) AS used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients WHERE id = $1")
         .bind(&id)
         .fetch_one(&state.db)
         .await;
@@ -533,7 +545,7 @@ async fn get_subscription(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Response {
-    let client = sqlx::query_as::<_, Client>("SELECT id, username, node_id, COALESCE(node_ids, '') AS node_ids, COALESCE(password, '') AS password, CAST(expiry AS TEXT) AS expiry, COALESCE(CAST(limit_gb AS INTEGER), 0) AS limit_gb, COALESCE(CAST(used_bytes AS INTEGER), 0) AS used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients WHERE id = $1")
+    let client = sqlx::query_as::<_, Client>("SELECT id, username, node_id, COALESCE(node_ids, '') AS node_ids, COALESCE(password, '') AS password, COALESCE(CAST(expiry AS TEXT), '') AS expiry, COALESCE(CAST(limit_gb AS INTEGER), 0) AS limit_gb, COALESCE(CAST(used_bytes AS INTEGER), 0) AS used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients WHERE id = $1")
         .bind(&id)
         .fetch_optional(&state.db)
         .await
@@ -658,7 +670,7 @@ async fn delete_node(State(state): State<AppState>, Path(id): Path<String>) -> R
 
 /// DELETE /api/clients/:id вЂ” remove a client and the SSH user from its node.
 async fn delete_client(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let client = match sqlx::query_as::<_, Client>("SELECT id, username, node_id, COALESCE(node_ids, '') AS node_ids, COALESCE(password, '') AS password, CAST(expiry AS TEXT) AS expiry, COALESCE(CAST(limit_gb AS INTEGER), 0) AS limit_gb, COALESCE(CAST(used_bytes AS INTEGER), 0) AS used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients WHERE id = $1")
+    let client = match sqlx::query_as::<_, Client>("SELECT id, username, node_id, COALESCE(node_ids, '') AS node_ids, COALESCE(password, '') AS password, COALESCE(CAST(expiry AS TEXT), '') AS expiry, COALESCE(CAST(limit_gb AS INTEGER), 0) AS limit_gb, COALESCE(CAST(used_bytes AS INTEGER), 0) AS used_bytes, CAST(created_at AS TEXT) AS created_at FROM clients WHERE id = $1")
         .bind(&id)
         .fetch_optional(&state.db)
         .await
