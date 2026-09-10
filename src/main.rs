@@ -1,4 +1,4 @@
-﻿mod models;
+mod models;
 
 use axum::{
     extract::{Path, Request, State},
@@ -784,6 +784,166 @@ async fn run_node_command(node: &Node, command: &str) -> Result<String, String> 
         .map_err(|_| "С‚Р°Р№РјР°СѓС‚ SSH".to_string())?
 }
 
+// ── Node auto-setup (install.sh over SSH) ───────────────────────────────────────────
+
+/// Configure a freshly added node as a working VPN host: run the same
+/// install.sh the desktop client's "Host install" runs, over SSH. install.sh
+/// is idempotent, so re-running it on a configured node just refreshes the
+/// config. Also mirrors the client's ff-shell + forgefox group setup so
+/// panel-created users land in the restricted environment.
+async fn setup_node(node: &Node) -> Result<String, String> {
+    let script = format!(
+        r#"set -e
+command -v curl >/dev/null 2>&1 || {{ export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq curl ca-certificates; }}
+command -v gcc >/dev/null 2>&1 || {{ export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq gcc make; }}
+curl -fsSL -o /tmp/forgefox-install.sh '{url}'
+bash /tmp/forgefox-install.sh
+rm -f /tmp/forgefox-install.sh
+
+# Restricted user environment (same as the desktop client's Host install)
+groupadd -f forgefox
+cat << 'FFEOF' > /usr/local/bin/ff-shell
+#!/bin/bash
+if [ "$1" = "-c" ]; then
+    if [[ "$2" == *"forgefox-bridge"* ]] || [[ "$2" == *"python"* ]]; then
+        exec sudo /bin/bash -c "$2"
+    fi
+fi
+echo "Access restricted to ForgeFox VPN."
+exit 1
+FFEOF
+chmod +x /usr/local/bin/ff-shell
+echo "%forgefox ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/forgefox
+chmod 0440 /etc/sudoers.d/forgefox
+if ! grep -q "Match Group forgefox" /etc/ssh/sshd_config; then
+    echo "" >> /etc/ssh/sshd_config
+    echo "Match Group forgefox" >> /etc/ssh/sshd_config
+    echo "    AllowTcpForwarding no" >> /etc/ssh/sshd_config
+    echo "    X11Forwarding no" >> /etc/ssh/sshd_config
+    echo "    PermitTunnel yes" >> /etc/ssh/sshd_config
+    systemctl restart sshd 2>/dev/null || systemctl restart ssh || true
+fi
+echo NODE_SETUP_OK"#,
+        url = NODE_INSTALL_URL
+    );
+
+    let fut = async {
+        let ssh_pass = node
+            .ssh_pass
+            .as_deref()
+            .ok_or_else(|| "у ноды не задан SSH пароль".to_string())?;
+
+        let config = Arc::new(russh::client::Config::default());
+        let mut session = russh::client::connect(
+            config,
+            (node.ip.as_str(), u16::try_from(node.port).unwrap_or(22)),
+            NodeSshHandler,
+        )
+        .await
+        .map_err(|e| format!("SSH connect: {e}"))?;
+
+        let authed = session
+            .authenticate_password(&node.ssh_user, ssh_pass)
+            .await
+            .map_err(|e| format!("SSH auth: {e}"))?;
+        if !authed {
+            return Err("SSH auth: неверный логин/пароль ноды".to_string());
+        }
+
+        let mut channel = session
+            .channel_open_session()
+            .await
+            .map_err(|e| format!("SSH channel: {e}"))?;
+        channel
+            .exec(true, script.as_bytes())
+            .await
+            .map_err(|e| format!("SSH exec: {e}"))?;
+
+        let mut output = String::new();
+        let mut exit_code: u32 = 0;
+        while let Some(msg) = channel.wait().await {
+            match msg {
+                russh::ChannelMsg::Data { ref data } => {
+                    output.push_str(&String::from_utf8_lossy(data));
+                }
+                russh::ChannelMsg::ExtendedData { ref data, .. } => {
+                    output.push_str(&String::from_utf8_lossy(data));
+                }
+                russh::ChannelMsg::ExitStatus { exit_status: code } => {
+                    exit_code = code;
+                }
+                _ => {}
+            }
+        }
+        let _ = session
+            .disconnect(russh::Disconnect::ByApplication, "done", "en")
+            .await;
+
+        // Keep the tail for the error path — install.sh's last words matter.
+        let lines: Vec<&str> = output.lines().collect();
+        let tail: String = lines[lines.len().saturating_sub(10)..].join("\n");
+
+        if exit_code != 0 {
+            return Err(format!("exit {exit_code}: {tail}"));
+        }
+        if !output.contains("NODE_SETUP_OK") {
+            return Err(format!("скрипт не дошёл до конца: {tail}"));
+        }
+        Ok(output)
+    };
+
+    // install.sh compiles the TUN bridge — minutes on slow VPSes.
+    tokio::time::timeout(SSH_SETUP_TIMEOUT, fut)
+        .await
+        .map_err(|_| {
+            format!(
+                "таймаут настройки ({} мин) — нода слишком медленная или недоступна",
+                SSH_SETUP_TIMEOUT.as_secs() / 60
+            )
+        })?
+}
+
+/// POST /api/nodes/:id/setup — run the host install on the node, update status.
+async fn run_node_setup(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let node = match sqlx::query_as::<_, Node>("SELECT id, name, ip, port, ssh_user, COALESCE(ssh_pass, '') AS ssh_pass, status, CAST(created_at AS TEXT) AS created_at FROM nodes WHERE id = $1")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+    {
+        Ok(Some(n)) => n,
+        Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Нода не найдена" }))).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("БД: {e}") }))).into_response(),
+    };
+
+    audit(&state, &format!("Настройка ноды {} ({}): запуск install.sh", node.name, node.ip)).await;
+
+    let res = setup_node(&node).await;
+    let status = if res.is_ok() { "online" } else { "offline" };
+    let _ = sqlx::query("UPDATE nodes SET status = $1 WHERE id = $2")
+        .bind(&status)
+        .bind(&id)
+        .execute(&state.db)
+        .await;
+
+    match res {
+        Ok(output) => {
+            // Keep the tail of install.sh output for the log.
+            let lines: Vec<&str> = output.lines().collect();
+            let tail: String = lines[lines.len().saturating_sub(30)..].join("\n");
+            tracing::info!("Node {} setup complete:\n{}", node.name, tail);
+            Json(serde_json::json!({ "id": id, "status": "online", "message": "Нода настроена — VPN-стек установлен" })).into_response()
+        }
+        Err(e) => {
+            tracing::error!("Node {} setup failed: {e}", node.name);
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": format!("Не удалось настроить ноду: {e}") })),
+            )
+                .into_response()
+        }
+    }
+}
+
 // в”Ђв”Ђ Real monitoring over SSH в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 #[derive(Serialize)]
@@ -1052,6 +1212,7 @@ async fn main() {
         .route("/nodes", get(get_nodes).post(add_node))
         .route("/nodes/:id", axum::routing::put(update_node).delete(delete_node))
         .route("/nodes/:id/check", post(check_node))
+        .route("/nodes/:id/setup", post(run_node_setup))
         .route("/clients", get(get_clients).post(add_client))
         .route("/clients/:id", delete(delete_client))
         .route("/monitoring", get(get_monitoring))

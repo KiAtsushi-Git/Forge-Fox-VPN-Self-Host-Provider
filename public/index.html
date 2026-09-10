@@ -193,8 +193,9 @@
                             </td>
                             <td class="py-4 text-right">
                                 <button class="text-orange-400 hover:text-orange-300 mx-1" @click="startEditNode(n)">✏️ Настроить</button>
+                                <button class="text-green-400 hover:text-green-300 mx-1" @click="setupNode(n)" :disabled="n._settingUp">⚙️ {{ n._settingUp ? 'Ставится…' : 'Установить' }}</button>
                                 <button class="text-blue-400 hover:text-blue-300 mx-1" @click="checkNode(n)">🩺 Проверить</button>
-                                <button class="text-red-400 hover:text-red-300 mx-1" @click="deleteNode(n)">🗑 Удалить</button>                                <button class="text-red-400 hover:text-red-300">Удалить</button>
+                                <button class="text-red-400 hover:text-red-300 mx-1" @click="deleteNode(n)">🗑 Удалить</button>
                             </td>
                         </tr>
                     </tbody>
@@ -461,6 +462,14 @@
             </div>
         </div>
     </div>
+
+    <!-- Toasts -->
+    <div class="fixed bottom-4 right-4 z-[60] space-y-2 max-w-md">
+        <div v-for="t in toasts" :key="t.id" class="px-4 py-3 rounded shadow-lg text-sm transition"
+             :class="t.type === 'error' ? 'bg-red-600 text-white' : (t.type === 'success' ? 'bg-green-600 text-white' : 'bg-slate-700 text-slate-100')">
+            {{ t.text }}
+        </div>
+    </div>
 </div>
 
 <script>
@@ -469,6 +478,20 @@
     createApp({
         setup() {
             const authToken = ref(localStorage.getItem('forgefox_token') || '');
+
+            // -- Toast notifications ---------------------------------
+            const toasts = ref([]);
+            let toastSeq = 0;
+            const showToast = (text, type = 'info') => {
+                const id = ++toastSeq;
+                toasts.value.push({ id, text, type });
+                // Cap the list: a long install shouldn't stack 50 errors.
+                if (toasts.value.length > 5) toasts.value.shift();
+                setTimeout(() => {
+                    toasts.value = toasts.value.filter(t => t.id !== id);
+                }, type === 'error' ? 15000 : 6000);
+            };
+
             const currentUser = ref(localStorage.getItem('forgefox_user') || '');
             const loginForm = ref({ username: '', password: '' });
             const loginError = ref('');
@@ -751,6 +774,29 @@
                 } catch (e) { console.error(e); }
             };
 
+            // Host install on the node — same install.sh the desktop client
+            // runs. Takes minutes (compiles the TUN bridge), so the button
+            // shows progress instead of leaving a dead-looking UI.
+            const setupNode = async (n) => {
+                if (n._settingUp) return;
+                n._settingUp = true;
+                showToast('Установка VPN-стека на «' + n.name + '»… Это займёт несколько минут', 'info');
+                try {
+                    const res = await apiFetch('/api/nodes/' + n.id + '/setup', { method: 'POST' });
+                    const data = await res.json().catch(() => ({}));
+                    if (res.ok) {
+                        n.status = 'online';
+                        showToast(data.message || 'Нода настроена', 'success');
+                    } else {
+                        n.status = 'offline';
+                        showToast(data.error || ('Ошибка установки (HTTP ' + res.status + ')'), 'error');
+                    }
+                } catch (e) {
+                    showToast('Не удалось подключиться к панели', 'error');
+                }
+                n._settingUp = false;
+            };
+
             // -- Confirm dialog --------------------------------------
             const confirmDialog = ref(null);
 
@@ -879,8 +925,9 @@
                 nodes, newNode, isAddingNode, nodeError, submitNode,
                 clients, newClient, isAddingClient, clientError, submitClient, clientNodeNames,
                 monitoring, logs,
-                editingNode, editNodeForm, editNodeError, isSavingNode, startEditNode, saveEditNode, checkNode,
+                editingNode, editNodeForm, editNodeError, isSavingNode, startEditNode, saveEditNode, checkNode, setupNode,
                 confirmDialog, deleteNode, deleteClient,
+                toasts, showToast,
                 qrSub, qrSubUrl, qrSrc, copySub, showQr,
                 updateInfo, updateBannerVisible, fetchUpdateInfo, dismissUpdate, updateNow
             };
