@@ -1,11 +1,14 @@
 #!/bin/bash
-# ForgeFox VPN Provider - Installation Script
+# ForgeFox VPN Provider (Python edition) — Installation Script
 # Installs everything from scratch on a clean Ubuntu/Debian system:
 # curl, git, docker (if missing), then builds and runs the panel.
 #
+# The panel image is pure Python (no compile stage), so the build takes
+# seconds instead of the minutes the Rust edition needed.
+#
 # Usage:
-#   bash provider_install.sh --db sqlite --user admin --pass secret
-#   bash provider_install.sh --db postgres --user admin --pass secret --port 8080
+#   bash install.sh --db sqlite --user admin --pass secret
+#   bash install.sh --db postgres --user admin --pass secret --port 8080
 
 # Exit on error, undefined var, and pipe failure so a broken step can't
 # silently report success (the old `curl | bash` failure mode).
@@ -106,18 +109,16 @@ compose() {
     fi
 }
 
-# ---- Get the panel image --------------------------------------------------
+# ---- Get the panel source and build the image -----------------------------
 # The image is not published to a registry — always build from source.
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
-log "Building the panel from source ($REPO_URL)..."
+log "Building the panel image from source ($REPO_URL)..."
 rm -rf "$INSTALL_DIR/build"
 git clone --depth 1 "$REPO_URL" "$INSTALL_DIR/build" || die "git clone failed"
 # Stamp the commit into the image — /api/update compares it to the tip of main.
 UPDATE_COMMIT=$(git -C "$INSTALL_DIR/build" rev-parse HEAD)
-# --progress=plain: without a TTY docker buffers its output, so the app log
-# would show nothing for the whole 5-15 min build and look hung.
 docker build --progress=plain --build-arg UPDATE_COMMIT="$UPDATE_COMMIT" -t "$IMAGE" "$INSTALL_DIR/build" || die "docker build failed"
 
 # update.sh is bind-mounted into the panel container for self-updates
@@ -165,23 +166,20 @@ services:
       - "127.0.0.1:$PG_HOST_PORT:5432"
 
   forgefox-panel:
-    image: ${IMAGE}
+    image: \${IMAGE}
     container_name: forgefox_panel
     restart: always
     network_mode: host
     environment:
       - DATABASE_URL=postgres://forgefox:forgefox@127.0.0.1:$PG_HOST_PORT/forgefox
-      - ADMIN_USER=${ADMIN_USER}
-      - ADMIN_PASS=${ADMIN_PASS}
+      - ADMIN_USER=\${ADMIN_USER}
+      - ADMIN_PASS=\${ADMIN_PASS}
     volumes:
       # Self-update: the panel runs the host's update.sh and rebuilds itself
-      # through the host's docker socket (see run_self_update in main.rs).
-      # REALDIR escapes as \$REALDIR so the shell expands it HERE (the running
-      # installer knows the install path) while docker compose never sees a
-      # variable — compose vars come from .env only and would be empty.
+      # through the host's docker socket (see /api/update/run).
       - /var/run/docker.sock:/var/run/docker.sock
-      - \$REALDIR/update.sh:/app/update.sh
-      - \$REALDIR:/opt/forgefox-provider
+      - $REALDIR/update.sh:/app/update.sh
+      - $REALDIR:/opt/forgefox-provider
     depends_on:
       db:
         condition: service_healthy
@@ -190,28 +188,24 @@ volumes:
 EOF
 else
     # SQLite
-    cat << 'EOF' > docker-compose.yml
+    cat << EOF > docker-compose.yml
 services:
   forgefox-panel:
-    image: ${IMAGE}
+    image: \${IMAGE}
     container_name: forgefox_panel
     restart: always
     network_mode: host
     environment:
       - DATABASE_URL=sqlite://data/forgefox.db?mode=rwc
-      - ADMIN_USER=${ADMIN_USER}
-      - ADMIN_PASS=${ADMIN_PASS}
+      - ADMIN_USER=\${ADMIN_USER}
+      - ADMIN_PASS=\${ADMIN_PASS}
     volumes:
       - ./data:/app/data
-      # Self-update (same as the postgres compose above). This heredoc is
-      # QUOTED ('EOF') so nothing expands — REALDIR is substituted with sed
-      # right after writing, keeping the compose free of shell variables.
+      # Self-update (same as the postgres compose above).
       - /var/run/docker.sock:/var/run/docker.sock
-      - @REALDIR@/update.sh:/app/update.sh
-      - @REALDIR@:/opt/forgefox-provider
+      - $REALDIR/update.sh:/app/update.sh
+      - $REALDIR:/opt/forgefox-provider
 EOF
-    # Quoted heredoc above kept @REALDIR@ literal; expand it now.
-    sed -i "s|@REALDIR@|$REALDIR|g" docker-compose.yml
 fi
 
 # ---- Firewall -------------------------------------------------------------
@@ -231,9 +225,11 @@ log "Starting Provider Panel..."
 compose up -d
 
 # ---- Wait for the panel ---------------------------------------------------
+# The Python panel boots in a couple of seconds; 60s is a generous budget
+# that also covers first-run pip-less image pulls of postgres.
 log "Waiting for the panel to start..."
 PANEL_OK=0
-for i in $(seq 1 45); do
+for i in $(seq 1 30); do
     if curl -fsS -m 3 "http://127.0.0.1:$PORT" -o /dev/null 2>/dev/null; then
         PANEL_OK=1
         break

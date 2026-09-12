@@ -1,30 +1,16 @@
-# Build stage (latest stable — some transitive deps require rustc >= 1.88)
-# Pin both stages to the SAME Debian release: a binary built on trixie
-# (glibc 2.39) cannot run on bookworm (glibc 2.36) — the panel container
-# crashed on startup with "GLIBC_2.38 not found".
-FROM rust:1-slim-bookworm AS builder
-WORKDIR /app
+# ForgeFox VPN Provider — Python edition.
+# No compilation stage: pip install + copy, so the image builds in seconds
+# (the Rust build took minutes compiling the TUN bridge deps).
+FROM python:3.12-slim-bookworm
 
 # Commit the image was built from, passed as --build-arg by install.sh /
-# update.sh. The binary reads it at compile time (option_env!) and serves it
-# as the running version in /api/update — without it the panel always thinks
-# it is up to date ("unknown" == latest).
+# update.sh. The app reads it at runtime and serves it as the running
+# version in /api/update.
 ARG UPDATE_COMMIT=unknown
-ENV UPDATE_COMMIT=${UPDATE_COMMIT}
+ENV UPDATE_COMMIT=${UPDATE_COMMIT} \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
 
-# Cache dependencies: build with a dummy main first
-COPY Cargo.toml Cargo.lock ./
-RUN mkdir -p src && echo 'fn main() {}' > src/main.rs \
-    && cargo build --release \
-    && rm -rf src target/release/deps/forgefoxvpn_provider* target/release/forgefoxvpn-provider
-
-# Build the real binary (migrations are embedded into the binary by sqlx::migrate!)
-COPY src ./src
-COPY migrations ./migrations
-RUN touch src/main.rs && cargo build --release
-
-# Runtime stage
-FROM debian:bookworm-slim
 # git + docker-cli: the self-update script (update.sh) runs INSIDE this
 # container (spawned by /api/update/run) and needs git to clone the repo and
 # docker to rebuild the image through the mounted host socket.
@@ -38,8 +24,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY --from=builder /app/target/release/forgefoxvpn-provider /app/forgefoxvpn-provider
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app ./app
+COPY migrations ./migrations
 COPY public ./public
 
 EXPOSE 8080
-CMD ["/app/forgefoxvpn-provider"]
+CMD ["python", "-m", "app.main"]

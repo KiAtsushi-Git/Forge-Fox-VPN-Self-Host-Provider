@@ -17,7 +17,7 @@
             --border-color: #334155;
             --accent-color: #f97316; /* orange-500 */
         }
-        
+
         [data-theme="light"] {
             --bg-color: #f1f5f9;
             --text-color: #0f172a;
@@ -41,6 +41,11 @@
         .card { background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 1.5rem; }
         .accent-text { color: var(--accent-color); }
         .accent-bg { background-color: var(--accent-color); }
+        input, select, textarea { color-scheme: dark; }
+        [data-theme="light"] input, [data-theme="light"] select, [data-theme="light"] textarea { color-scheme: light; }
+        .inp { width: 100%; background-color: rgb(30 41 59); border: 1px solid rgb(51 65 85); border-radius: 0.25rem; padding: 0.5rem 0.75rem; color: white; }
+        [data-theme="light"] .inp { background-color: white; border-color: rgb(203 213 225); color: #0f172a; }
+        [data-theme="midnight"] .inp { background-color: #18181b; border-color: #27272a; }
     </style>
 </head>
 <body class="flex h-screen">
@@ -54,13 +59,11 @@
             <form @submit.prevent="login">
                 <div class="mb-4">
                     <label class="block text-sm text-slate-400 mb-1">Логин</label>
-                    <input v-model="loginForm.username" type="text" autocomplete="username"
-                           class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" required>
+                    <input v-model="loginForm.username" type="text" autocomplete="username" class="inp" required>
                 </div>
                 <div class="mb-6">
                     <label class="block text-sm text-slate-400 mb-1">Пароль</label>
-                    <input v-model="loginForm.password" type="password" autocomplete="current-password"
-                           class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" required>
+                    <input v-model="loginForm.password" type="password" autocomplete="current-password" class="inp" required>
                 </div>
                 <div v-if="loginError" class="text-red-400 text-sm mb-4">{{ loginError }}</div>
                 <button type="submit" :disabled="isLoggingIn"
@@ -75,7 +78,7 @@
     <template v-if="authToken">
     <!-- Sidebar -->
     <div class="sidebar w-64 flex flex-col">
-        <div class="p-6 text-2xl font-bold text-orange-500 border-b border-slate-700">
+        <div class="p-6 text-2xl font-bold text-orange-500 border-b" style="border-color: var(--border-color)">
             🦊 ForgeFox
         </div>
         <nav class="flex-1 p-4 space-y-2">
@@ -91,7 +94,7 @@
     <!-- Main Content -->
     <div class="flex-1 p-8 overflow-y-auto">
         <header class="flex justify-between items-center mb-8">
-            <h1 class="text-3xl font-semibold capitalize">{{ currentTab === 'nodes' ? 'Сервера (Ноды)' : currentTab === 'users' ? 'Пользователи' : 'Дашборд' }}</h1>
+            <h1 class="text-3xl font-semibold capitalize">{{ tabTitles[currentTab] || currentTab }}</h1>
             <div class="flex items-center space-x-4">
                 <span class="text-xs text-slate-500">v{{ updateInfo.current_version || '?' }}</span>
                 <span>{{ currentUser }}</span>
@@ -99,7 +102,7 @@
             </div>
         </header>
 
-        <!-- Update banner: shows once per release; "Не сейчас" hides it (permanently for THIS version), always visible in Settings -->
+        <!-- Update banner -->
         <div v-if="updateBannerVisible" class="card mb-6 flex items-center justify-between gap-4 border-orange-500/50">
             <div>
                 <div class="font-semibold text-orange-400 mb-1">🚀 Доступно обновление панели: v{{ updateInfo.latest_version }}</div>
@@ -114,22 +117,40 @@
 
         <!-- DASHBOARD TAB -->
         <div v-if="currentTab === 'dashboard'">
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div v-if="stats.nodes_needing_setup > 0" class="card mb-6 flex items-center justify-between gap-4 border-red-500/50">
+                <div>
+                    <div class="font-semibold text-red-400 mb-1">⚠️ VPN-стек не установлен на {{ stats.nodes_needing_setup }} нод(ах)</div>
+                    <div class="text-sm text-slate-400">Перейдите на вкладку «Ноды» и нажмите «Установить» — панель сама развернёт VPN через SSH.</div>
+                </div>
+                <button @click="switchTab('nodes')" class="bg-orange-500 hover:bg-orange-600 px-5 py-2 rounded text-white font-medium transition shrink-0">К нодам</button>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6 mb-8">
                 <div class="card">
-                    <div class="text-slate-400 text-sm">Всего серверов</div>
-                    <div class="text-4xl font-bold mt-2">{{ stats.nodes_count }}</div>
+                    <div class="text-slate-400 text-sm">Ноды онлайн</div>
+                    <div class="text-4xl font-bold mt-2">{{ stats.online_nodes }} <span class="text-lg text-slate-400">/ {{ stats.nodes_count }}</span></div>
+                    <div v-if="stats.nodes_needing_setup" class="text-xs text-red-400 mt-1">без VPN: {{ stats.nodes_needing_setup }}</div>
+                </div>
+                <div class="card">
+                    <div class="text-slate-400 text-sm">Онлайн-сессии</div>
+                    <div class="text-4xl font-bold mt-2 text-green-500">{{ stats.active_sessions }}</div>
+                    <div class="text-xs text-slate-500 mt-1">подключены сейчас</div>
                 </div>
                 <div class="card">
                     <div class="text-slate-400 text-sm">Активные пользователи</div>
+                    <div class="text-4xl font-bold mt-2 text-green-500">{{ stats.active_clients }}</div>
+                    <div v-if="stats.blocked_clients" class="text-xs text-red-400 mt-1">заблокировано: {{ stats.blocked_clients }}</div>
+                </div>
+                <div class="card">
+                    <div class="text-slate-400 text-sm">Всего пользователей</div>
                     <div class="text-4xl font-bold mt-2">{{ stats.clients_count }}</div>
                 </div>
                 <div class="card">
                     <div class="text-slate-400 text-sm">Трафик за месяц</div>
-                    <div class="text-4xl font-bold mt-2 text-orange-500">0 GB</div>
+                    <div class="text-4xl font-bold mt-2 text-orange-500">{{ stats.month_traffic_gb }} GB</div>
                 </div>
             </div>
             <div class="card">
-                <h2 class="text-xl font-semibold mb-4">Статистика Трафика</h2>
+                <h2 class="text-xl font-semibold mb-4">Статистика Трафика (последние 14 дней)</h2>
                 <div class="relative h-64 w-full">
                     <canvas id="trafficChart"></canvas>
                 </div>
@@ -143,23 +164,23 @@
                 <form @submit.prevent="submitNode" class="grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
                     <div>
                         <label class="block text-sm text-slate-400 mb-1">Название</label>
-                        <input v-model="newNode.name" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" required placeholder="Напр. Germany-1">
+                        <input v-model="newNode.name" type="text" class="inp" required placeholder="Напр. Germany-1">
                     </div>
                     <div>
                         <label class="block text-sm text-slate-400 mb-1">IP адрес</label>
-                        <input v-model="newNode.ip" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" required placeholder="1.2.3.4">
+                        <input v-model="newNode.ip" type="text" class="inp" required placeholder="1.2.3.4">
                     </div>
                     <div>
                         <label class="block text-sm text-slate-400 mb-1">SSH Порт</label>
-                        <input v-model.number="newNode.port" type="number" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" required>
+                        <input v-model.number="newNode.port" type="number" class="inp" required>
                     </div>
                     <div>
                         <label class="block text-sm text-slate-400 mb-1">Пользователь</label>
-                        <input v-model="newNode.ssh_user" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" required>
+                        <input v-model="newNode.ssh_user" type="text" class="inp" required>
                     </div>
                     <div>
                         <label class="block text-sm text-slate-400 mb-1">SSH Пароль</label>
-                        <input v-model="newNode.ssh_pass" type="password" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" required placeholder="Для создания юзеров">
+                        <input v-model="newNode.ssh_pass" type="password" class="inp" required placeholder="Для создания юзеров">
                     </div>
                     <div>
                         <button type="submit" :disabled="isAddingNode" class="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 px-4 rounded transition disabled:opacity-50">
@@ -178,24 +199,39 @@
                         <tr class="border-b border-slate-700 text-slate-400">
                             <th class="pb-3 font-medium">Название</th>
                             <th class="pb-3 font-medium">IP:Порт</th>
-                            <th class="pb-3 font-medium">Статус</th>
+                            <th class="pb-3 font-medium">SSH</th>
+                            <th class="pb-3 font-medium">VPN-стек</th>
+                            <th class="pb-3 font-medium">Онлайн</th>
                             <th class="pb-3 font-medium text-right">Действия</th>
                         </tr>
                     </thead>
                     <tbody>
                         <tr v-for="n in nodes" :key="n.id" class="border-b border-slate-800 hover:bg-slate-800/50">
-                            <td class="py-4 font-semibold">{{ n.name }}</td>
+                            <td class="py-4 font-semibold cursor-pointer hover:underline" @click="openNodeDetail(n)">{{ countryFlag(n.country) }} {{ n.name }}</td>
                             <td class="py-4 text-slate-300">{{ n.ip }}:{{ n.port }}</td>
                             <td class="py-4">
                                 <span class="px-2 py-1 rounded text-xs" :class="n.status === 'online' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'">
                                     {{ n.status }}
                                 </span>
                             </td>
-                            <td class="py-4 text-right">
-                                <button class="text-orange-400 hover:text-orange-300 mx-1" @click="startEditNode(n)">✏️ Настроить</button>
-                                <button class="text-green-400 hover:text-green-300 mx-1" @click="setupNode(n)" :disabled="n._settingUp">⚙️ {{ n._settingUp ? 'Ставится…' : 'Установить' }}</button>
-                                <button class="text-blue-400 hover:text-blue-300 mx-1" @click="checkNode(n)">🩺 Проверить</button>
-                                <button class="text-red-400 hover:text-red-300 mx-1" @click="deleteNode(n)">🗑 Удалить</button>
+                            <td class="py-4">
+                                <span v-if="n.installed === 'yes'" class="px-2 py-1 rounded text-xs bg-green-500/20 text-green-400">✅ Установлен</span>
+                                <span v-else-if="n.installed === 'no'" class="px-2 py-1 rounded text-xs bg-red-500/20 text-red-400">❌ Не установлен</span>
+                                <span v-else class="px-2 py-1 rounded text-xs bg-slate-500/20 text-slate-400">❓ Неизвестно</span>
+                            </td>
+                            <td class="py-4 text-slate-300">
+                                <span v-if="nodeSessionCount(n)" class="text-green-400 font-semibold">{{ nodeSessionCount(n) }}</span>
+                                <span v-else class="text-slate-500">0</span>
+                            </td>
+                            <td class="py-4 text-right whitespace-nowrap">
+                                <button v-if="n.installed !== 'yes'" class="mx-1 px-3 py-1 rounded text-xs font-bold" :class="n.installed === 'no' ? 'bg-red-500/80 hover:bg-red-500 text-white' : 'bg-orange-500 hover:bg-orange-600 text-white'" @click="setupNode(n)" :disabled="n._settingUp">
+                                    {{ n._settingUp ? '⏳ Ставится…' : '⬇ Установить VPN' }}
+                                </button>
+                                <button class="text-blue-400 hover:text-blue-300 mx-1" @click="openNodeDetail(n)" title="Детали">🔍</button>
+                                <button class="text-orange-400 hover:text-orange-300 mx-1" @click="startEditNode(n)" title="Настроить">✏️</button>
+                                <button class="text-green-400 hover:text-green-300 mx-1" @click="checkNode(n)" :disabled="n._checking" title="Проверить SSH и VPN">🩺 {{ n._checking ? '…' : '' }}</button>
+                                <button class="text-yellow-500 hover:text-yellow-300 mx-1" @click="rebootNode(n)" title="Перезагрузить ноду">🔄</button>
+                                <button class="text-red-400 hover:text-red-300 mx-1" @click="deleteNode(n)" title="Удалить">🗑</button>
                             </td>
                         </tr>
                     </tbody>
@@ -210,22 +246,27 @@
                 <form @submit.prevent="submitClient" class="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
                     <div>
                         <label class="block text-sm text-slate-400 mb-1">Имя (username)</label>
-                        <input v-model="newClient.username" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" required placeholder="ivan">
+                        <input v-model="newClient.username" type="text" class="inp" required placeholder="ivan">
                     </div>
                     <div>
                         <label class="block text-sm text-slate-400 mb-1">Сервер (Нода)</label>
-                        <select v-model="newClient.node_ids" multiple size="4" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" required>
+                        <select v-model="newClient.node_ids" multiple size="4" class="inp" required>
                             <option v-for="n in nodes" :key="n.id" :value="n.id">{{ n.name }} ({{ n.ip }})</option>
                         </select>
                         <div class="text-xs text-slate-500 mt-1">Ctrl/Shift+клик — выбрать несколько серверов</div>
                     </div>
                     <div>
                         <label class="block text-sm text-slate-400 mb-1">Лимит (GB)</label>
-                        <input v-model="newClient.limit_gb" type="number" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" placeholder="Без лимита">
+                        <input v-model="newClient.limit_gb" type="number" class="inp" placeholder="Без лимита">
                     </div>
                     <div>
                         <label class="block text-sm text-slate-400 mb-1">Истекает (Дата)</label>
-                        <input v-model="newClient.expiry" type="datetime-local" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white">
+                        <input v-model="newClient.expiry" type="datetime-local" class="inp">
+                        <div class="flex gap-1 mt-1">
+                            <button type="button" @click="newClient.expiry = presetExpiry(7)" class="text-xs px-2 py-0.5 rounded border border-slate-600 hover:border-slate-400 text-slate-300">+7д</button>
+                            <button type="button" @click="newClient.expiry = presetExpiry(30)" class="text-xs px-2 py-0.5 rounded border border-slate-600 hover:border-slate-400 text-slate-300">+30д</button>
+                            <button type="button" @click="newClient.expiry = presetExpiry(90)" class="text-xs px-2 py-0.5 rounded border border-slate-600 hover:border-slate-400 text-slate-300">+90д</button>
+                        </div>
                     </div>
                     <div>
                         <button type="submit" :disabled="isAddingClient || !newClient.node_ids.length" class="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 px-4 rounded transition disabled:opacity-50">
@@ -236,36 +277,98 @@
                 <div v-if="clientError" class="text-red-400 text-sm mt-3">{{ clientError }}</div>
             </div>
 
+            <div class="card mb-6">
+                <h2 class="text-xl font-semibold mb-4">Массовое создание</h2>
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                    <div class="md:col-span-2">
+                        <label class="block text-sm text-slate-400 mb-1">Имена (по одному в строке)</label>
+                        <textarea v-model="bulkUsernames" rows="4" class="inp" placeholder="ivan&#10;maria&#10;petya"></textarea>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-slate-400 mb-1">Сервер (Нода)</label>
+                        <select v-model="bulkNodeIds" multiple size="4" class="inp">
+                            <option v-for="n in nodes" :key="n.id" :value="n.id">{{ n.name }}</option>
+                        </select>
+                    </div>
+                    <div>
+                        <button type="button" :disabled="isAddingClient || !bulkNodeIds.length || !bulkUsernames.trim()" @click="submitBulkClients"
+                                class="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 px-4 rounded transition disabled:opacity-50">
+                            Создать всех
+                        </button>
+                        <div class="text-xs text-slate-500 mt-1">Лимит/срок берутся из формы выше</div>
+                    </div>
+                </div>
+                <div v-if="bulkResult" class="mt-3 text-sm">
+                    <span class="text-green-400">✅ создано: {{ bulkResult.created }}</span>
+                    <span v-if="bulkResult.failed.length" class="text-red-400 ml-4">❌ ошибки: {{ bulkResult.failed.map(f => f.username + ' — ' + f.error).join('; ') }}</span>
+                </div>
+            </div>
+
             <div class="card">
-                <h2 class="text-xl font-semibold mb-4">Список пользователей</h2>
+                <div class="flex flex-wrap justify-between items-center gap-4 mb-4">
+                    <h2 class="text-xl font-semibold">Список пользователей</h2>
+                    <div class="flex flex-wrap gap-2 items-center">
+                        <input v-model="clientFilter.search" type="text" placeholder="🔍 поиск по имени" class="inp !w-44 !py-1.5 text-sm">
+                        <select v-model="clientFilter.status" class="inp !w-36 !py-1.5 text-sm">
+                            <option value="">все статусы</option>
+                            <option value="active">активные</option>
+                            <option value="blocked">заблокированные</option>
+                            <option value="expired">истёкшие</option>
+                            <option value="limited">по лимиту</option>
+                        </select>
+                        <select v-model="clientFilter.nodeId" class="inp !w-44 !py-1.5 text-sm">
+                            <option value="">все ноды</option>
+                            <option v-for="n in nodes" :key="n.id" :value="n.id">{{ n.name }}</option>
+                        </select>
+                        <button @click="exportClients" class="border border-slate-600 hover:border-slate-400 px-3 py-1.5 rounded text-sm transition">⬇ Экспорт</button>
+                        <label class="border border-slate-600 hover:border-slate-400 px-3 py-1.5 rounded text-sm transition cursor-pointer">
+                            ⬆ Импорт
+                            <input type="file" accept="application/json" class="hidden" @change="importClients">
+                        </label>
+                    </div>
+                </div>
                 <div v-if="clients.length === 0" class="text-slate-400 py-4 text-center">Нет пользователей</div>
+                <div v-else-if="filteredClients.length === 0" class="text-slate-400 py-4 text-center">Под фильтр ничего не подошло</div>
                 <table v-else class="w-full text-left">
                     <thead>
                         <tr class="border-b border-slate-700 text-slate-400">
                             <th class="pb-3 font-medium">Username</th>
                             <th class="pb-3 font-medium">Сервер</th>
                             <th class="pb-3 font-medium">Трафик</th>
+                            <th class="pb-3 font-medium">Срок</th>
                             <th class="pb-3 font-medium">Статус</th>
                             <th class="pb-3 font-medium text-right">Действия</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <tr v-for="c in clients" :key="c.id" class="border-b border-slate-800 hover:bg-slate-800/50">
-                            <td class="py-4 font-semibold">{{ c.username }}</td>
-                            <td class="py-4 text-slate-300">
-                                {{ clientNodeNames(c) }}
+                        <tr v-for="c in filteredClients" :key="c.id" class="border-b border-slate-800 hover:bg-slate-800/50">
+                            <td class="py-4 font-semibold">
+                                {{ c.username }}
+                                <span v-if="clientOnline(c)" class="ml-1 text-green-400" title="Подключён сейчас">●</span>
+                            </td>
+                            <td class="py-4 text-slate-300 text-sm">{{ clientNodeNames(c) }}</td>
+                            <td class="py-4">
+                                <div class="text-sm">{{ (c.used_bytes / 1024 / 1024 / 1024).toFixed(2) }} GB <span v-if="c.limit_gb">/ {{ c.limit_gb }} GB</span></div>
+                                <div v-if="c.limit_gb" class="w-32 bg-slate-800 rounded-full h-1.5 mt-1">
+                                    <div class="h-1.5 rounded-full" :class="trafficBarClass(c)" :style="{ width: trafficBarWidth(c) + '%' }"></div>
+                                </div>
+                            </td>
+                            <td class="py-4 text-slate-300 text-sm">
+                                {{ c.expiry || '∞' }}
+                                <button v-if="c.expiry" @click="extendClient(c, 30)" class="ml-1 text-xs text-blue-400 hover:text-blue-300" title="Продлить на 30 дней">+30д</button>
                             </td>
                             <td class="py-4">
-                                {{ (c.used_bytes / 1024 / 1024 / 1024).toFixed(2) }} GB 
-                                <span v-if="c.limit_gb"> / {{ c.limit_gb }} GB</span>
+                                <span class="px-2 py-1 rounded text-xs" :class="statusClass(c.status)">{{ statusLabel(c.status) }}</span>
                             </td>
-                            <td class="py-4">
-                                <span class="px-2 py-1 rounded text-xs bg-green-500/20 text-green-400">Активен</span>
-                            </td>
-                            <td class="py-4 text-right">
-                                <button class="text-orange-400 hover:text-orange-300 mx-1" @click="copySub(c)">🔗 Ссылка</button>
-                                <button class="text-purple-400 hover:text-purple-300 mx-1" @click="showQr(c)">📱 QR</button>
-                                <button class="text-red-400 hover:text-red-300 mx-1" @click="deleteClient(c)">🗑 Удалить</button>
+                            <td class="py-4 text-right whitespace-nowrap">
+                                <button class="text-orange-400 hover:text-orange-300 mx-1" @click="startEditClient(c)" title="Изменить">✏️</button>
+                                <button class="text-cyan-400 hover:text-cyan-300 mx-1" @click="showClientTraffic(c)" title="График трафика">📊</button>
+                                <button class="text-slate-300 hover:text-white mx-1" @click="copySub(c)" title="Скопировать ссылку-подписку">🔗</button>
+                                <button class="text-purple-400 hover:text-purple-300 mx-1" @click="showQr(c)" title="QR-код подписки">📱</button>
+                                <button class="text-yellow-400 hover:text-yellow-300 mx-1" @click="resetPassword(c)" title="Сбросить пароль">🔑</button>
+                                <button v-if="c.status === 'active'" class="text-red-400 hover:text-red-300 mx-1" @click="blockClient(c)" title="Заблокировать">⛔</button>
+                                <button v-else class="text-green-400 hover:text-green-300 mx-1" @click="unblockClient(c)" title="Разблокировать">▶️</button>
+                                <button class="text-red-400 hover:text-red-300 mx-1" @click="deleteClient(c)" title="Удалить">🗑</button>
                             </td>
                         </tr>
                     </tbody>
@@ -275,38 +378,56 @@
 
         <!-- MONITORING TAB -->
         <div v-if="currentTab === 'monitoring'">
-            <h2 class="text-2xl font-semibold mb-6">Мониторинг Нод</h2>
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-2xl font-semibold">Мониторинг Нод</h2>
+                <button @click="fetchMonitoring" class="border border-slate-600 hover:border-slate-400 px-4 py-1.5 rounded text-sm transition">Обновить</button>
+            </div>
+            <div v-if="monitoring.length === 0" class="text-slate-400 py-4 text-center">Нет нод для мониторинга</div>
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 <div v-for="m in monitoring" :key="m.id" class="card">
                     <div class="flex justify-between items-center mb-4">
-                        <h3 class="text-lg font-medium">{{ nodes.find(n => n.id === m.id)?.name || m.id }}</h3>
-                        <span class="w-3 h-3 rounded-full bg-green-500 shadow-[0_0_8px_#22c55e]"></span>
+                        <h3 class="text-lg font-medium">{{ countryFlag(nodeById(m.id)?.country) }} {{ nodeById(m.id)?.name || m.id }}</h3>
+                        <span class="w-3 h-3 rounded-full" :class="m.online ? 'bg-green-500 shadow-[0_0_8px_#22c55e]' : 'bg-red-500'"></span>
                     </div>
-                    
-                    <div class="space-y-4">
+
+                    <div v-if="m.online" class="space-y-4">
                         <div>
                             <div class="flex justify-between text-sm text-slate-400 mb-1">
-                                <span>CPU Usage</span>
+                                <span>CPU</span>
                                 <span>{{ m.cpu_percent.toFixed(1) }}%</span>
                             </div>
                             <div class="w-full bg-slate-800 rounded-full h-2">
-                                <div class="accent-bg h-2 rounded-full" :style="{ width: m.cpu_percent + '%' }"></div>
+                                <div class="accent-bg h-2 rounded-full" :style="{ width: Math.min(100, m.cpu_percent) + '%' }"></div>
                             </div>
                         </div>
                         <div>
                             <div class="flex justify-between text-sm text-slate-400 mb-1">
-                                <span>RAM Usage</span>
-                                <span>{{ m.ram_mb }} MB</span>
+                                <span>RAM</span>
+                                <span>{{ m.ram_mb.toFixed(0) }} / {{ m.ram_total_mb.toFixed(0) }} MB</span>
                             </div>
                             <div class="w-full bg-slate-800 rounded-full h-2">
-                                <div class="bg-blue-500 h-2 rounded-full" :style="{ width: (m.ram_mb / 4096 * 100) + '%' }"></div>
+                                <div class="bg-blue-500 h-2 rounded-full" :style="{ width: ramBarWidth(m) + '%' }"></div>
                             </div>
                         </div>
-                        <div class="flex justify-between pt-2 border-t border-slate-700">
-                            <div class="text-green-400 text-sm">↓ {{ m.rx_kbps }} Kbps</div>
-                            <div class="text-blue-400 text-sm">↑ {{ m.tx_kbps }} Kbps</div>
+                        <div v-if="m.disk_percent !== null && m.disk_percent !== undefined">
+                            <div class="flex justify-between text-sm text-slate-400 mb-1">
+                                <span>Диск /</span>
+                                <span :class="m.disk_percent > 85 ? 'text-red-400' : ''">{{ m.disk_percent }}%</span>
+                            </div>
+                            <div class="w-full bg-slate-800 rounded-full h-2">
+                                <div class="h-2 rounded-full" :class="m.disk_percent > 85 ? 'bg-red-500' : 'bg-emerald-500'" :style="{ width: Math.min(100, m.disk_percent) + '%' }"></div>
+                            </div>
+                        </div>
+                        <div class="flex justify-between pt-2 border-t border-slate-700 text-sm">
+                            <div class="text-green-400">↓ {{ m.rx_kbps.toFixed(0) }} Kbps ({{ fmtBytes(m.rx_bytes) }})</div>
+                            <div class="text-blue-400">↑ {{ m.tx_kbps.toFixed(0) }} Kbps ({{ fmtBytes(m.tx_bytes) }})</div>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-slate-500">Uptime: {{ fmtUptime(m.uptime_seconds) }}</span>
+                            <span :class="m.sessions.length ? 'text-green-400' : 'text-slate-500'">👥 онлайн: {{ m.sessions.length }}</span>
                         </div>
                     </div>
+                    <div v-else class="text-red-400 text-sm py-4 text-center">Нода недоступна по SSH</div>
                 </div>
             </div>
         </div>
@@ -326,7 +447,7 @@
                     <tbody>
                         <tr v-for="(log, idx) in logs" :key="idx" class="border-b border-slate-800/50 hover:bg-slate-800/30">
                             <td class="py-3 text-slate-400">{{ log.time }}</td>
-                            <td class="py-3 text-orange-400">{{ log.user }}</td>
+                            <td class="py-3 text-orange-400">{{ log.user || 'system' }}</td>
                             <td class="py-3 text-slate-300">{{ log.action }}</td>
                         </tr>
                     </tbody>
@@ -338,7 +459,7 @@
         <div v-if="currentTab === 'settings'">
             <div class="card max-w-2xl mb-6">
                 <h2 class="text-xl font-semibold mb-6">Настройки Провайдера</h2>
-                
+
                 <div class="mb-6">
                     <h3 class="text-lg font-medium text-slate-300 mb-3">Тема оформления</h3>
                     <div class="grid grid-cols-3 gap-4">
@@ -356,18 +477,73 @@
 
                 <hr class="border-slate-700 my-6">
 
-                <div>
+                <div class="mb-6">
                     <h3 class="text-lg font-medium text-slate-300 mb-3">Telegram Bot</h3>
-                    <p class="text-sm text-slate-400 mb-4">Привяжите Telegram бота для получения уведомлений об истекающих подписках и создания юзеров прямо из TG.</p>
-                    <div class="flex gap-4">
-                        <input type="text" class="flex-1 bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white" placeholder="Bot Token (e.g. 123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11)">
-                        <button class="bg-orange-500 hover:bg-orange-600 px-6 py-2 rounded text-white font-medium transition">Сохранить</button>
+                    <p class="text-sm text-slate-400 mb-4">Привяжите Telegram бота для уведомлений (истекающие подписки, лимиты, ноды офлайн) и управления пользователями командами /add, /users, /sub.</p>
+                    <div class="space-y-3">
+                        <input v-model="settingsForm.telegram_bot_token" type="text" class="inp" placeholder="Bot Token (e.g. 123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11)">
+                        <div class="flex gap-4 items-center">
+                            <label class="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" v-model="settingsForm.notify_expiry"> уведомлять об истечении</label>
+                            <label class="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" v-model="settingsForm.notify_limit"> уведомлять о лимитах</label>
+                            <label class="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" v-model="settingsForm.notify_node_offline"> ноды офлайн</label>
+                        </div>
+                        <input v-model="settingsForm.panel_url" type="text" class="inp" placeholder="Публичный URL панели (для ссылок в Telegram), напр. http://1.2.3.4:8080">
+                        <div class="flex gap-3">
+                            <button @click="saveSettings" :disabled="isSavingSettings" class="bg-orange-500 hover:bg-orange-600 px-6 py-2 rounded text-white font-medium transition disabled:opacity-50">
+                                {{ isSavingSettings ? 'Сохранение...' : 'Сохранить' }}
+                            </button>
+                            <button @click="testTelegram" class="border border-slate-600 hover:border-slate-400 px-5 py-2 rounded text-slate-300 transition">Тест-сообщение</button>
+                        </div>
+                        <div v-if="settingsMsg" class="text-sm" :class="settingsMsgType === 'error' ? 'text-red-400' : 'text-green-400'">{{ settingsMsg }}</div>
+                        <div v-if="settingsForm.telegram_bot_token && !settingsForm.telegram_admin_chat_id" class="text-xs text-slate-500">
+                            После сохранения напишите боту /start в Telegram — он привяжет ваш чат.
+                        </div>
                     </div>
                 </div>
 
                 <hr class="border-slate-700 my-6">
 
-                <div>
+                <div class="mb-6">
+                    <h3 class="text-lg font-medium text-slate-300 mb-3">Интервалы фоновых задач</h3>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm text-slate-400 mb-1">Проверка нод (сек)</label>
+                            <input v-model.number="settingsForm.node_poll_interval" type="number" min="10" class="inp">
+                        </div>
+                        <div>
+                            <label class="block text-sm text-slate-400 mb-1">Сбор трафика (сек)</label>
+                            <input v-model.number="settingsForm.traffic_poll_interval" type="number" min="30" class="inp">
+                        </div>
+                    </div>
+                    <div class="text-xs text-slate-500 mt-2">Применяются при сохранении настроек — перезапуск не нужен.</div>
+                </div>
+
+                <hr class="border-slate-700 my-6">
+
+                <div class="mb-6">
+                    <h3 class="text-lg font-medium text-slate-300 mb-3">Смена пароля администратора</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                        <div>
+                            <label class="block text-sm text-slate-400 mb-1">Текущий пароль</label>
+                            <input v-model="passwordForm.old_password" type="password" class="inp">
+                        </div>
+                        <div>
+                            <label class="block text-sm text-slate-400 mb-1">Новый пароль</label>
+                            <input v-model="passwordForm.new_password" type="password" class="inp">
+                        </div>
+                        <div>
+                            <button @click="changePassword" :disabled="!passwordForm.old_password || !passwordForm.new_password || isChangingPassword"
+                                    class="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 px-4 rounded transition disabled:opacity-50">
+                                {{ isChangingPassword ? 'Смена...' : 'Сменить' }}
+                            </button>
+                        </div>
+                    </div>
+                    <div v-if="passwordMsg" class="text-sm mt-2" :class="passwordMsgType === 'error' ? 'text-red-400' : 'text-green-400'">{{ passwordMsg }}</div>
+                </div>
+
+                <hr class="border-slate-700 my-6">
+
+                <div class="mb-6">
                     <h3 class="text-lg font-medium text-slate-300 mb-3">Обновление панели</h3>
                     <div class="flex items-center gap-4 mb-3">
                         <span class="text-sm text-slate-400">
@@ -391,9 +567,10 @@
                 <div>
                     <h3 class="text-lg font-medium text-slate-300 mb-3">Управление базой данных</h3>
                     <div class="flex gap-4">
-                        <button class="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded text-white transition">Скачать бэкап (SQLite)</button>
-                        <button class="border border-red-500 text-red-500 hover:bg-red-500 hover:text-white px-4 py-2 rounded transition">Сбросить статистику</button>
+                        <button @click="downloadBackup" class="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded text-white transition">⬇ Скачать бэкап</button>
+                        <button @click="resetStats" class="border border-red-500 text-red-500 hover:bg-red-500 hover:text-white px-4 py-2 rounded transition">Сбросить статистику</button>
                     </div>
+                    <div v-if="dbMsg" class="text-sm mt-2 text-green-400">{{ dbMsg }}</div>
                 </div>
             </div>
         </div>
@@ -407,26 +584,26 @@
             <form @submit.prevent="saveEditNode" class="space-y-4">
                 <div>
                     <label class="block text-sm text-slate-400 mb-1">Название</label>
-                    <input v-model="editNodeForm.name" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white">
+                    <input v-model="editNodeForm.name" type="text" class="inp">
                 </div>
                 <div class="grid grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm text-slate-400 mb-1">IP</label>
-                        <input v-model="editNodeForm.ip" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white">
+                        <input v-model="editNodeForm.ip" type="text" class="inp">
                     </div>
                     <div>
                         <label class="block text-sm text-slate-400 mb-1">SSH порт</label>
-                        <input v-model.number="editNodeForm.port" type="number" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white">
+                        <input v-model.number="editNodeForm.port" type="number" class="inp">
                     </div>
                 </div>
                 <div class="grid grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm text-slate-400 mb-1">SSH пользователь</label>
-                        <input v-model="editNodeForm.ssh_user" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white">
+                        <input v-model="editNodeForm.ssh_user" type="text" class="inp">
                     </div>
                     <div>
                         <label class="block text-sm text-slate-400 mb-1">SSH пароль (пусто = не менять)</label>
-                        <input v-model="editNodeForm.ssh_pass" type="password" placeholder="не меняется" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white">
+                        <input v-model="editNodeForm.ssh_pass" type="password" placeholder="не меняется" class="inp">
                     </div>
                 </div>
                 <div v-if="editNodeError" class="text-red-400 text-sm">{{ editNodeError }}</div>
@@ -437,6 +614,128 @@
                     </button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Edit client modal -->
+    <div v-if="editingClient" class="fixed inset-0 bg-black/70 flex items-center justify-center z-50" @click.self="editingClient = null">
+        <div class="card w-full max-w-md m-4">
+            <h2 class="text-xl font-semibold mb-4">Изменить «{{ editingClient.username }}»</h2>
+            <form @submit.prevent="saveEditClient" class="space-y-4">
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm text-slate-400 mb-1">Лимит (GB, пусто = без лимита)</label>
+                        <input v-model="editClientForm.limit_gb" type="number" class="inp" placeholder="Без лимита">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-slate-400 mb-1">Истекает (пусто = бессрочно)</label>
+                        <input v-model="editClientForm.expiry" type="datetime-local" class="inp">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm text-slate-400 mb-1">Ноды</label>
+                    <select v-model="editClientForm.node_ids" multiple size="4" class="inp">
+                        <option v-for="n in nodes" :key="n.id" :value="n.id">{{ n.name }} ({{ n.ip }})</option>
+                    </select>
+                </div>
+                <div v-if="editClientError" class="text-red-400 text-sm">{{ editClientError }}</div>
+                <div class="flex gap-3 justify-end pt-2">
+                    <button type="button" @click="editingClient = null" class="border border-slate-600 hover:border-slate-400 px-5 py-2 rounded text-slate-300 transition">Отмена</button>
+                    <button type="submit" :disabled="isSavingClient" class="bg-orange-500 hover:bg-orange-600 px-6 py-2 rounded text-white font-medium transition disabled:opacity-50">
+                        {{ isSavingClient ? 'Сохранение...' : 'Сохранить' }}
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Node detail modal -->
+    <div v-if="nodeDetail" class="fixed inset-0 bg-black/70 flex items-center justify-center z-50" @click.self="nodeDetail = null">
+        <div class="card w-full max-w-2xl m-4 max-h-[90vh] overflow-y-auto">
+            <div class="flex justify-between items-start mb-4">
+                <div>
+                    <h2 class="text-xl font-semibold">{{ countryFlag(nodeDetail.node.country) }} {{ nodeDetail.node.name }}</h2>
+                    <div class="text-sm text-slate-400">{{ nodeDetail.node.ip }}:{{ nodeDetail.node.port }} · добавлена {{ nodeDetail.node.created_at }}</div>
+                </div>
+                <button @click="nodeDetail = null" class="text-slate-400 hover:text-white text-xl">✕</button>
+            </div>
+
+            <div v-if="nodeDetail.monitor.online" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                <div class="border rounded p-3" style="border-color: var(--border-color)">
+                    <div class="text-xs text-slate-400">CPU</div>
+                    <div class="text-lg font-bold">{{ nodeDetail.monitor.cpu_percent.toFixed(1) }}%</div>
+                </div>
+                <div class="border rounded p-3" style="border-color: var(--border-color)">
+                    <div class="text-xs text-slate-400">RAM</div>
+                    <div class="text-lg font-bold">{{ nodeDetail.monitor.ram_mb.toFixed(0) }} / {{ nodeDetail.monitor.ram_total_mb.toFixed(0) }} MB</div>
+                </div>
+                <div class="border rounded p-3" style="border-color: var(--border-color)">
+                    <div class="text-xs text-slate-400">Диск /</div>
+                    <div class="text-lg font-bold" :class="nodeDetail.monitor.disk_percent > 85 ? 'text-red-400' : ''">{{ nodeDetail.monitor.disk_percent ?? '—' }}%</div>
+                </div>
+                <div class="border rounded p-3" style="border-color: var(--border-color)">
+                    <div class="text-xs text-slate-400">Uptime</div>
+                    <div class="text-lg font-bold">{{ fmtUptime(nodeDetail.monitor.uptime_seconds) }}</div>
+                </div>
+            </div>
+            <div v-else class="text-red-400 text-sm mb-4">Нода недоступна по SSH: {{ nodeDetail.monitor.error || 'соединение не установлено' }}</div>
+
+            <div class="mb-4">
+                <h3 class="text-sm font-semibold text-slate-300 mb-2">VPN-стек</h3>
+                <div class="flex flex-wrap gap-2">
+                    <span class="px-2 py-1 rounded text-xs" :class="nodeDetail.monitor.vpn.bridge ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'">мост forgefox-bridge: {{ nodeDetail.monitor.vpn.bridge ? '✓' : '✗' }}</span>
+                    <span class="px-2 py-1 rounded text-xs" :class="nodeDetail.monitor.vpn.ff_shell ? 'bg-green-500/20 text-green-400' : 'bg-yellow-500/20 text-yellow-400'">ff-shell: {{ nodeDetail.monitor.vpn.ff_shell ? '✓' : '✗' }}</span>
+                    <span class="px-2 py-1 rounded text-xs" :class="nodeDetail.monitor.vpn.group ? 'bg-green-500/20 text-green-400' : 'bg-yellow-500/20 text-yellow-400'">группа forgefox: {{ nodeDetail.monitor.vpn.group ? '✓' : '✗' }}</span>
+                    <span class="px-2 py-1 rounded text-xs" :class="nodeDetail.monitor.vpn.sudoers ? 'bg-green-500/20 text-green-400' : 'bg-yellow-500/20 text-yellow-400'">sudoers: {{ nodeDetail.monitor.vpn.sudoers ? '✓' : '✗' }}</span>
+                    <span class="px-2 py-1 rounded text-xs" :class="nodeDetail.monitor.vpn.sshd ? 'bg-green-500/20 text-green-400' : 'bg-yellow-500/20 text-yellow-400'">sshd Match: {{ nodeDetail.monitor.vpn.sshd ? '✓' : '✗' }}</span>
+                </div>
+                <div v-if="nodeDetail.monitor.vpn.known && !nodeDetail.monitor.vpn.bridge" class="mt-3">
+                    <button @click="setupNode(nodeDetail.node); nodeDetail = null" class="bg-red-500/80 hover:bg-red-500 px-4 py-2 rounded text-white font-medium text-sm transition">⬇ Установить VPN-стек</button>
+                </div>
+            </div>
+
+            <div class="mb-2">
+                <h3 class="text-sm font-semibold text-slate-300 mb-2">Онлайн-сессии ({{ nodeDetail.monitor.sessions.length }})</h3>
+                <div v-if="nodeDetail.monitor.sessions.length" class="flex flex-wrap gap-2 mb-3">
+                    <span v-for="u in nodeDetail.monitor.sessions" :key="u" class="px-2 py-1 rounded text-xs bg-green-500/20 text-green-400">● {{ u }}</span>
+                </div>
+                <div v-else class="text-sm text-slate-500 mb-3">Никто не подключён</div>
+            </div>
+
+            <div>
+                <h3 class="text-sm font-semibold text-slate-300 mb-2">Пользователи на ноде ({{ nodeDetail.clients.length }})</h3>
+                <div v-if="nodeDetail.clients.length === 0" class="text-sm text-slate-500">Пользователей нет</div>
+                <table v-else class="w-full text-left text-sm">
+                    <thead>
+                        <tr class="border-b border-slate-700 text-slate-400">
+                            <th class="pb-2 font-medium">Имя</th>
+                            <th class="pb-2 font-medium">Трафик</th>
+                            <th class="pb-2 font-medium">Статус</th>
+                            <th class="pb-2 font-medium">Сейчас</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="c in nodeDetail.clients" :key="c.id" class="border-b border-slate-800/50">
+                            <td class="py-2">{{ c.username }}</td>
+                            <td class="py-2">{{ (c.used_bytes / 1024**3).toFixed(2) }} GB<span v-if="c.limit_gb"> / {{ c.limit_gb }} GB</span></td>
+                            <td class="py-2"><span class="px-2 py-0.5 rounded text-xs" :class="statusClass(c.status)">{{ statusLabel(c.status) }}</span></td>
+                            <td class="py-2"><span v-if="c.online_now" class="text-green-400">● онлайн</span><span v-else class="text-slate-500">—</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Client traffic chart modal -->
+    <div v-if="trafficClient" class="fixed inset-0 bg-black/70 flex items-center justify-center z-50" @click.self="trafficClient = null">
+        <div class="card w-full max-w-lg m-4">
+            <h2 class="text-xl font-semibold mb-1">Трафик {{ trafficClient.username }}</h2>
+            <div class="text-sm text-slate-400 mb-4">Всего: {{ (trafficClient.used_bytes / 1024**3).toFixed(2) }} GB<span v-if="trafficClient.limit_gb"> из {{ trafficClient.limit_gb }} GB</span></div>
+            <div class="relative h-56 w-full">
+                <canvas id="clientTrafficChart"></canvas>
+            </div>
+            <button @click="trafficClient = null" class="mt-4 border border-slate-600 hover:border-slate-400 px-5 py-2 rounded text-slate-300 transition w-full">Закрыть</button>
         </div>
     </div>
 
@@ -455,10 +754,21 @@
     <div v-if="confirmDialog" class="fixed inset-0 bg-black/70 flex items-center justify-center z-50" @click.self="confirmDialog = null">
         <div class="card w-full max-w-sm m-4">
             <h2 class="text-lg font-semibold mb-3">{{ confirmDialog.title }}</h2>
-            <div class="text-sm text-slate-400 mb-5">{{ confirmDialog.text }}</div>
+            <div class="text-sm text-slate-400 mb-5 whitespace-pre-line">{{ confirmDialog.text }}</div>
             <div class="flex gap-3 justify-end">
                 <button @click="confirmDialog = null" class="border border-slate-600 hover:border-slate-400 px-5 py-2 rounded text-slate-300 transition">Отмена</button>
                 <button @click="confirmDialog.action" class="bg-red-500 hover:bg-red-600 px-5 py-2 rounded text-white font-medium transition">Подтвердить</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Info modal (for results like reset password / bulk / import) -->
+    <div v-if="infoDialog" class="fixed inset-0 bg-black/70 flex items-center justify-center z-50" @click.self="infoDialog = null">
+        <div class="card w-full max-w-md m-4">
+            <h2 class="text-lg font-semibold mb-3">{{ infoDialog.title }}</h2>
+            <div class="text-sm text-slate-300 mb-5 whitespace-pre-line break-all">{{ infoDialog.text }}</div>
+            <div class="flex justify-end">
+                <button @click="infoDialog = null" class="bg-orange-500 hover:bg-orange-600 px-5 py-2 rounded text-white font-medium transition">ОК</button>
             </div>
         </div>
     </div>
@@ -473,11 +783,12 @@
 </div>
 
 <script>
-    const { createApp, ref, onMounted } = Vue;
+    const { createApp, ref, computed, onMounted } = Vue;
 
     createApp({
         setup() {
             const authToken = ref(localStorage.getItem('forgefox_token') || '');
+            const tabTitles = { dashboard: 'Дашборд', nodes: 'Сервера (Ноды)', users: 'Пользователи', monitoring: 'Мониторинг', logs: 'Журнал', settings: 'Настройки' };
 
             // -- Toast notifications ---------------------------------
             const toasts = ref([]);
@@ -485,11 +796,8 @@
             const showToast = (text, type = 'info') => {
                 const id = ++toastSeq;
                 toasts.value.push({ id, text, type });
-                // Cap the list: a long install shouldn't stack 50 errors.
                 if (toasts.value.length > 5) toasts.value.shift();
-                setTimeout(() => {
-                    toasts.value = toasts.value.filter(t => t.id !== id);
-                }, type === 'error' ? 15000 : 6000);
+                setTimeout(() => { toasts.value = toasts.value.filter(t => t.id !== id); }, type === 'error' ? 15000 : 6000);
             };
 
             const currentUser = ref(localStorage.getItem('forgefox_user') || '');
@@ -497,7 +805,6 @@
             const loginError = ref('');
             const isLoggingIn = ref(false);
 
-            // fetch wrapper: attaches the auth token, kicks back to login on 401
             const apiFetch = async (url, options = {}) => {
                 const res = await fetch(url, {
                     ...options,
@@ -511,6 +818,12 @@
                     throw new Error('Unauthorized');
                 }
                 return res;
+            };
+            const apiJson = async (url, options = {}) => {
+                const res = await apiFetch(url, options);
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.detail || data.error || ('HTTP ' + res.status));
+                return data;
             };
 
             const login = async () => {
@@ -533,7 +846,7 @@
                         renderChart();
                     } else {
                         const data = await res.json().catch(() => ({}));
-                        loginError.value = data.error || 'Ошибка входа';
+                        loginError.value = data.detail || data.error || 'Ошибка входа';
                     }
                 } catch (e) {
                     loginError.value = 'Не удалось подключиться к серверу';
@@ -550,52 +863,44 @@
 
             const currentTab = ref('dashboard');
             const currentTheme = ref(localStorage.getItem('forgefox_theme') || 'dark');
-            const stats = ref({ nodes_count: 0, clients_count: 0 });
+            const stats = ref({ nodes_count: 0, online_nodes: 0, clients_count: 0, active_clients: 0, blocked_clients: 0, month_traffic_gb: 0 });
             const nodes = ref([]);
             let chartInstance = null;
-            
+            let trafficData = [];
+
             const setTheme = (theme) => {
                 currentTheme.value = theme;
                 document.documentElement.setAttribute('data-theme', theme);
                 localStorage.setItem('forgefox_theme', theme);
-                renderChart(); // re-render with new colors
+                renderChart();
             };
 
             const renderChart = () => {
                 if (currentTab.value !== 'dashboard') return;
-                
-                // wait for DOM
                 setTimeout(() => {
                     const ctx = document.getElementById('trafficChart');
                     if (!ctx) return;
-                    
                     if (chartInstance) chartInstance.destroy();
 
                     const isLight = currentTheme.value === 'light';
                     const textColor = isLight ? '#64748b' : '#94a3b8';
                     const gridColor = isLight ? '#e2e8f0' : '#334155';
-                    const accentColor = currentTheme.value === 'midnight' ? '#a855f7' : (isLight ? '#3b82f6' : '#f97316');
+                    const rxColor = '#22c55e';
+                    const txColor = currentTheme.value === 'midnight' ? '#a855f7' : (isLight ? '#3b82f6' : '#f97316');
 
                     chartInstance = new Chart(ctx, {
                         type: 'line',
                         data: {
-                            labels: ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'],
-                            datasets: [{
-                                label: 'Трафик (GB)',
-                                data: [12, 19, 3, 5, 2, 3, 10], // mock data
-                                borderColor: accentColor,
-                                backgroundColor: accentColor + '33', // 20% opacity
-                                borderWidth: 2,
-                                fill: true,
-                                tension: 0.4
-                            }]
+                            labels: trafficData.map(d => d.day.slice(5)),
+                            datasets: [
+                                { label: 'Приём (GB)', data: trafficData.map(d => d.rx_gb), borderColor: rxColor, backgroundColor: rxColor + '33', borderWidth: 2, fill: true, tension: 0.4 },
+                                { label: 'Отдача (GB)', data: trafficData.map(d => d.tx_gb), borderColor: txColor, backgroundColor: txColor + '33', borderWidth: 2, fill: true, tension: 0.4 }
+                            ]
                         },
                         options: {
                             responsive: true,
                             maintainAspectRatio: false,
-                            plugins: {
-                                legend: { display: false }
-                            },
+                            plugins: { legend: { labels: { color: textColor } } },
                             scales: {
                                 x: { grid: { color: gridColor }, ticks: { color: textColor } },
                                 y: { grid: { color: gridColor }, ticks: { color: textColor }, beginAtZero: true }
@@ -604,23 +909,28 @@
                     });
                 }, 100);
             };
-            
-            // Новая нода форма
+
+            const fetchStats = async () => {
+                try {
+                    stats.value = await apiJson('/api/dashboard');
+                } catch (e) { console.error(e); }
+            };
+
+            const fetchTrafficStats = async () => {
+                try {
+                    trafficData = await apiJson('/api/stats/traffic?days=14');
+                    renderChart();
+                } catch (e) { console.error(e); }
+            };
+
+            // -- Nodes -----------------------------------------------
             const newNode = ref({ name: '', ip: '', port: 22, ssh_user: 'root', ssh_pass: '' });
             const isAddingNode = ref(false);
             const nodeError = ref('');
 
-            const fetchStats = async () => {
-                try {
-                    const res = await apiFetch('/api/dashboard');
-                    if (res.ok) stats.value = await res.json();
-                } catch (e) { console.error(e); }
-            };
-
             const fetchNodes = async () => {
                 try {
-                    const res = await apiFetch('/api/nodes');
-                    if (res.ok) nodes.value = await res.json();
+                    nodes.value = await apiJson('/api/nodes');
                 } catch (e) { console.error(e); }
             };
 
@@ -628,35 +938,93 @@
                 isAddingNode.value = true;
                 nodeError.value = '';
                 try {
-                    const res = await apiFetch('/api/nodes', {
+                    const data = await apiJson('/api/nodes', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(newNode.value)
                     });
-                    if (res.ok) {
-                        newNode.value = { name: '', ip: '', port: 22, ssh_user: 'root', ssh_pass: '' };
-                        await fetchNodes();
-                        await fetchStats();
-                    } else {
-                        const data = await res.json().catch(() => ({}));
-                        nodeError.value = data.error || ('Не удалось добавить ноду (HTTP ' + res.status + ')');
+                    newNode.value = { name: '', ip: '', port: 22, ssh_user: 'root', ssh_pass: '' };
+                    await fetchNodes();
+                    await fetchStats();
+                    // The panel just probed the node: offer to install the
+                    // VPN stack right away if it isn't there yet.
+                    if (data.status === 'offline') {
+                        showToast('Нода добавлена, но SSH-соединение не удалось — проверьте IP/порт/пароль', 'error');
+                    } else if (data.installed === 'no') {
+                        confirmDialog.value = {
+                            title: 'Установить VPN сейчас?',
+                            text: `Нода «${data.name}» доступна по SSH, но VPN-стек на ней не найден (нет forgefox-bridge). Установить его сейчас? Это займёт несколько минут.`,
+                            action: () => {
+                                confirmDialog.value = null;
+                                const n = nodes.value.find(x => x.id === data.id);
+                                if (n) setupNode(n);
+                            }
+                        };
+                    } else if (data.installed === 'yes') {
+                        showToast('Нода добавлена — VPN-стек уже установлен ✅', 'success');
                     }
                 } catch (e) {
-                    nodeError.value = 'Не удалось подключиться к серверу';
-                    console.error(e);
+                    nodeError.value = e.message;
                 }
                 isAddingNode.value = false;
             };
 
+            const nodeById = (id) => nodes.value.find(n => n.id === id);
+
+            const countryFlag = (code) => {
+                if (!code || code.length !== 2) return '';
+                return String.fromCodePoint(...[...code.toUpperCase()].map(c => 127397 + c.charCodeAt(0)));
+            };
+
+            const nodeSessionCount = (n) => (n.sessions || '').split(',').filter(Boolean).length;
+
+            const nodeSessions = computed(() => {
+                const set = new Set();
+                for (const n of nodes.value) {
+                    for (const u of (n.sessions || '').split(',')) if (u) set.add(u);
+                }
+                return set;
+            });
+
+            const clientOnline = (c) => nodeSessions.value.has(c.username);
+
+            // -- Node detail / reboot ------------------------------------
+            const nodeDetail = ref(null);
+
+            const openNodeDetail = async (n) => {
+                try {
+                    nodeDetail.value = await apiJson('/api/nodes/' + n.id + '/detail');
+                } catch (e) { showToast(e.message, 'error'); }
+            };
+
+            const rebootNode = (n) => {
+                confirmDialog.value = {
+                    title: 'Перезагрузить ноду?',
+                    text: `«${n.name}» (${n.ip}) будет перезагружена. Все активные VPN-сессии оборвутся и восстановятся автоматически.`,
+                    action: async () => {
+                        confirmDialog.value = null;
+                        try {
+                            const data = await apiJson('/api/nodes/' + n.id + '/reboot', { method: 'POST' });
+                            showToast(data.message, 'info');
+                            n.status = 'offline';
+                            await fetchStats();
+                        } catch (e) { showToast(e.message, 'error'); }
+                    }
+                };
+            };
+
+            // -- Clients ---------------------------------------------
             const clients = ref([]);
             const newClient = ref({ username: '', node_ids: [], expiry: null, limit_gb: null });
             const isAddingClient = ref(false);
             const clientError = ref('');
+            const bulkUsernames = ref('');
+            const bulkNodeIds = ref([]);
+            const bulkResult = ref(null);
 
             const fetchClients = async () => {
                 try {
-                    const res = await apiFetch('/api/clients');
-                    if (res.ok) clients.value = await res.json();
+                    clients.value = await apiJson('/api/clients');
                 } catch (e) { console.error(e); }
             };
 
@@ -669,63 +1037,268 @@
                 return names.length ? names.join(', ') : 'Неизвестно';
             };
 
+            const statusLabel = (s) => ({ active: 'Активен', blocked: 'Заблокирован', expired: 'Истёк', limited: 'Лимит' }[s] || s);
+            const statusClass = (s) => ({
+                active: 'bg-green-500/20 text-green-400',
+                blocked: 'bg-red-500/20 text-red-400',
+                expired: 'bg-yellow-500/20 text-yellow-400',
+                limited: 'bg-orange-500/20 text-orange-400'
+            }[s] || 'bg-slate-500/20 text-slate-400');
+
+            const trafficBarWidth = (c) => c.limit_gb ? Math.min(100, (c.used_bytes / 1024**3) / c.limit_gb * 100) : 0;
+            const trafficBarClass = (c) => {
+                const pct = trafficBarWidth(c);
+                return pct >= 90 ? 'bg-red-500' : pct >= 70 ? 'bg-yellow-500' : 'bg-green-500';
+            };
+
+            // Expiry preset helpers (datetime-local format)
+            const presetExpiry = (days) => {
+                const d = new Date(Date.now() + days * 86400000);
+                const pad = (x) => String(x).padStart(2, '0');
+                return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+            };
+
+            const extendClient = async (c, days) => {
+                const base = c.expiry ? new Date(c.expiry.replace(' ', 'T')) : new Date();
+                const extended = new Date(Math.max(base.getTime(), Date.now()) + days * 86400000);
+                const pad = (x) => String(x).padStart(2, '0');
+                const newVal = `${extended.getFullYear()}-${pad(extended.getMonth() + 1)}-${pad(extended.getDate())}T${pad(extended.getHours())}:${pad(extended.getMinutes())}`;
+                try {
+                    await apiJson('/api/clients/' + c.id, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ expiry: newVal, status: c.status === 'expired' ? 'active' : undefined })
+                    });
+                    showToast(`${c.username}: продлён до ${newVal.replace('T', ' ')}`, 'success');
+                    await fetchClients();
+                    await fetchStats();
+                } catch (e) { showToast(e.message, 'error'); }
+            };
+
+            // -- Client filter ------------------------------------------
+            const clientFilter = ref({ search: '', status: '', nodeId: '' });
+            const filteredClients = computed(() => {
+                const f = clientFilter.value;
+                return clients.value.filter(c => {
+                    if (f.search && !c.username.toLowerCase().includes(f.search.toLowerCase())) return false;
+                    if (f.status && (c.status || 'active') !== f.status) return false;
+                    if (f.nodeId) {
+                        const ids = (c.node_ids || c.node_id || '').split(',').map(x => x.trim()).filter(Boolean);
+                        if (!ids.includes(f.nodeId)) return false;
+                    }
+                    return true;
+                });
+            });
+
+            // -- Client traffic chart ------------------------------------
+            const trafficClient = ref(null);
+            let clientChart = null;
+
+            const showClientTraffic = async (c) => {
+                trafficClient.value = c;
+                try {
+                    const series = await apiJson('/api/clients/' + c.id + '/traffic?days=14');
+                    setTimeout(() => {
+                        const ctx = document.getElementById('clientTrafficChart');
+                        if (!ctx) return;
+                        if (clientChart) clientChart.destroy();
+                        const textColor = '#94a3b8', gridColor = '#334155';
+                        clientChart = new Chart(ctx, {
+                            type: 'bar',
+                            data: {
+                                labels: series.map(d => d.day.slice(5)),
+                                datasets: [{ label: 'GB в день', data: series.map(d => d.gb), backgroundColor: '#f9731688', borderColor: '#f97316', borderWidth: 1 }]
+                            },
+                            options: {
+                                responsive: true, maintainAspectRatio: false,
+                                plugins: { legend: { display: false } },
+                                scales: {
+                                    x: { grid: { color: gridColor }, ticks: { color: textColor } },
+                                    y: { grid: { color: gridColor }, ticks: { color: textColor }, beginAtZero: true }
+                                }
+                            }
+                        });
+                    }, 100);
+                } catch (e) { showToast(e.message, 'error'); }
+            };
+
+            const buildClientPayload = (form) => ({
+                ...form,
+                expiry: form.expiry || null,
+                limit_gb: form.limit_gb ? parseInt(form.limit_gb) : null
+            });
+
             const submitClient = async () => {
                 isAddingClient.value = true;
                 clientError.value = '';
                 try {
-                    const payload = {
-                        ...newClient.value,
-                        node_ids: [...newClient.value.node_ids],
-                        node_id: newClient.value.node_ids[0] || '',
-                        limit_gb: newClient.value.limit_gb ? parseInt(newClient.value.limit_gb) : null
-                    };
-                    const res = await apiFetch('/api/clients', {
+                    const payload = buildClientPayload(newClient.value);
+                    payload.node_ids = [...newClient.value.node_ids];
+                    payload.node_id = newClient.value.node_ids[0] || '';
+                    await apiJson('/api/clients', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
                     });
-                    if (res.ok) {
-                        newClient.value = { username: '', node_ids: [], expiry: null, limit_gb: null };
-                        await fetchClients();
-                        await fetchStats();
-                    } else {
-                        const data = await res.json().catch(() => ({}));
-                        clientError.value = data.error || ('Не удалось создать пользователя (HTTP ' + res.status + ')');
-                    }
+                    newClient.value = { username: '', node_ids: [], expiry: null, limit_gb: null };
+                    await fetchClients();
+                    await fetchStats();
                 } catch (e) {
-                    clientError.value = 'Не удалось подключиться к серверу';
-                    console.error(e);
+                    clientError.value = e.message;
                 }
                 isAddingClient.value = false;
             };
 
+            const submitBulkClients = async () => {
+                isAddingClient.value = true;
+                bulkResult.value = null;
+                try {
+                    const usernames = bulkUsernames.value.split('\n').map(s => s.trim()).filter(Boolean);
+                    const payload = {
+                        usernames,
+                        node_ids: [...bulkNodeIds.value],
+                        expiry: newClient.value.expiry || null,
+                        limit_gb: newClient.value.limit_gb ? parseInt(newClient.value.limit_gb) : null
+                    };
+                    const data = await apiJson('/api/clients/bulk', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    bulkResult.value = { created: data.created.length, failed: data.failed };
+                    bulkUsernames.value = '';
+                    await fetchClients();
+                    await fetchStats();
+                } catch (e) {
+                    clientError.value = e.message;
+                }
+                isAddingClient.value = false;
+            };
+
+            // -- Client edit / block / reset password -----------------
+            const editingClient = ref(null);
+            const editClientForm = ref({});
+            const editClientError = ref('');
+            const isSavingClient = ref(false);
+            const infoDialog = ref(null);
+
+            const startEditClient = (c) => {
+                editingClient.value = c;
+                editClientError.value = '';
+                // datetime-local needs the "YYYY-MM-DDTHH:MM" shape
+                let expiry = '';
+                if (c.expiry) {
+                    expiry = c.expiry.replace(' ', 'T').slice(0, 16);
+                }
+                editClientForm.value = { limit_gb: c.limit_gb || '', expiry, node_ids: c.all_node_ids || (c.node_ids || c.node_id || '').split(',').filter(Boolean) };
+            };
+
+            const saveEditClient = async () => {
+                isSavingClient.value = true;
+                editClientError.value = '';
+                try {
+                    const body = {
+                        limit_gb: editClientForm.value.limit_gb ? parseInt(editClientForm.value.limit_gb) : 0,
+                        expiry: editClientForm.value.expiry || '',
+                        node_ids: [...editClientForm.value.node_ids]
+                    };
+                    await apiJson('/api/clients/' + editingClient.value.id, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body)
+                    });
+                    editingClient.value = null;
+                    await fetchClients();
+                    await fetchStats();
+                } catch (e) {
+                    editClientError.value = e.message;
+                }
+                isSavingClient.value = false;
+            };
+
+            const resetPassword = async (c) => {
+                try {
+                    const data = await apiJson('/api/clients/' + c.id + '/reset-password', { method: 'POST' });
+                    infoDialog.value = {
+                        title: 'Новый пароль ' + c.username,
+                        text: data.password + '\n\nСсылка-подписка осталась прежней — клиенты скачают её заново.',
+                        action: () => { infoDialog.value = null; }
+                    };
+                    await fetchClients();
+                } catch (e) { showToast(e.message, 'error'); }
+            };
+
+            const blockClient = async (c) => {
+                try {
+                    await apiJson('/api/clients/' + c.id + '/block', { method: 'POST' });
+                    await fetchClients();
+                } catch (e) { showToast(e.message, 'error'); }
+            };
+
+            const unblockClient = async (c) => {
+                try {
+                    await apiJson('/api/clients/' + c.id + '/unblock', { method: 'POST' });
+                    await fetchClients();
+                } catch (e) { showToast(e.message, 'error'); }
+            };
+
+            const exportClients = () => { window.open('/api/clients/export', '_blank'); };
+
+            const importClients = async (ev) => {
+                const file = ev.target.files[0];
+                ev.target.value = '';
+                if (!file) return;
+                try {
+                    const text = await file.text();
+                    const parsed = JSON.parse(text);
+                    const payload = { clients: parsed.clients || parsed };
+                    const data = await apiJson('/api/clients/import', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    showToast('Импорт: создано ' + data.created + ', пропущено ' + data.skipped.length, 'success');
+                    if (data.failed.length) showToast('Ошибки: ' + data.failed.map(f => f.username).join(', '), 'error');
+                    await fetchClients();
+                } catch (e) { showToast('Импорт не удался: ' + e.message, 'error'); }
+            };
+
+            // -- Monitoring / logs ------------------------------------
             const monitoring = ref([]);
             const logs = ref([]);
 
             const fetchMonitoring = async () => {
                 try {
-                    const res = await apiFetch('/api/monitoring');
-                    if (res.ok) monitoring.value = await res.json();
+                    monitoring.value = await apiJson('/api/monitoring');
                 } catch (e) { console.error(e); }
             };
 
             const fetchLogs = async () => {
                 try {
-                    const res = await apiFetch('/api/logs');
-                    if (res.ok) logs.value = await res.json();
+                    logs.value = await apiJson('/api/logs');
                 } catch (e) { console.error(e); }
+            };
+
+            const ramBarWidth = (m) => m.ram_total_mb ? Math.min(100, m.ram_mb / m.ram_total_mb * 100) : 0;
+            const fmtBytes = (b) => {
+                if (b > 1024**3) return (b / 1024**3).toFixed(1) + ' GB';
+                if (b > 1024**2) return (b / 1024**2).toFixed(0) + ' MB';
+                if (b > 1024) return (b / 1024).toFixed(0) + ' KB';
+                return b + ' B';
+            };
+            const fmtUptime = (s) => {
+                const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+                return (d ? d + ' д ' : '') + h + ' ч ' + m + ' мин';
             };
 
             const switchTab = (tab) => {
                 currentTab.value = tab;
-                if (tab === 'dashboard') {
-                    fetchStats();
-                    renderChart();
-                }
+                if (tab === 'dashboard') { fetchStats(); fetchTrafficStats(); }
                 if (tab === 'nodes') fetchNodes();
                 if (tab === 'users') { fetchNodes(); fetchClients(); }
                 if (tab === 'monitoring') { fetchNodes(); fetchMonitoring(); }
                 if (tab === 'logs') fetchLogs();
+                if (tab === 'settings') fetchSettings();
             };
 
             // -- Node editing ----------------------------------------
@@ -746,53 +1319,44 @@
                 try {
                     const body = { ...editNodeForm.value };
                     if (!body.ssh_pass) body.ssh_pass = null;
-                    const res = await apiFetch('/api/nodes/' + editingNode.value.id, {
+                    await apiJson('/api/nodes/' + editingNode.value.id, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(body)
                     });
-                    if (res.ok) {
-                        editingNode.value = null;
-                        await fetchNodes();
-                    } else {
-                        const data = await res.json().catch(() => ({}));
-                        editNodeError.value = data.error || ('Ошибка сохранения (HTTP ' + res.status + ')');
-                    }
+                    editingNode.value = null;
+                    await fetchNodes();
                 } catch (e) {
-                    editNodeError.value = 'Не удалось подключиться к серверу';
+                    editNodeError.value = e.message;
                 }
                 isSavingNode.value = false;
             };
 
             const checkNode = async (n) => {
+                n._checking = true;
                 try {
-                    const res = await apiFetch('/api/nodes/' + n.id + '/check', { method: 'POST' });
-                    if (res.ok) {
-                        const data = await res.json();
-                        n.status = data.status;
-                    }
+                    const data = await apiJson('/api/nodes/' + n.id + '/check', { method: 'POST' });
+                    n.status = data.status;
+                    n.installed = data.installed;
+                    n.sessions = (data.sessions || []).join(',');
+                    await fetchStats();
                 } catch (e) { console.error(e); }
+                n._checking = false;
             };
 
-            // Host install on the node — same install.sh the desktop client
-            // runs. Takes minutes (compiles the TUN bridge), so the button
-            // shows progress instead of leaving a dead-looking UI.
             const setupNode = async (n) => {
                 if (n._settingUp) return;
                 n._settingUp = true;
                 showToast('Установка VPN-стека на «' + n.name + '»… Это займёт несколько минут', 'info');
                 try {
-                    const res = await apiFetch('/api/nodes/' + n.id + '/setup', { method: 'POST' });
-                    const data = await res.json().catch(() => ({}));
-                    if (res.ok) {
-                        n.status = 'online';
-                        showToast(data.message || 'Нода настроена', 'success');
-                    } else {
-                        n.status = 'offline';
-                        showToast(data.error || ('Ошибка установки (HTTP ' + res.status + ')'), 'error');
-                    }
+                    const data = await apiJson('/api/nodes/' + n.id + '/setup', { method: 'POST' });
+                    n.status = 'online';
+                    n.installed = 'yes';
+                    showToast(data.message || 'Нода настроена', 'success');
+                    await fetchStats();
                 } catch (e) {
-                    showToast('Не удалось подключиться к панели', 'error');
+                    n.status = 'offline';
+                    showToast(e.message, 'error');
                 }
                 n._settingUp = false;
             };
@@ -803,12 +1367,12 @@
             const deleteNode = (n) => {
                 confirmDialog.value = {
                     title: 'Удалить ноду?',
-                    text: `«${n.name}» (${n.ip}) будет удалена вместе со всеми её пользователями. Системные юзеры на сервере останутся.`,
+                    text: `«${n.name}» (${n.ip}) будет удалена. Пользователи, живущие только на ней, будут удалены вместе с их системными юзерами на сервере.`,
                     action: async () => {
                         confirmDialog.value = null;
                         try {
-                            const res = await apiFetch('/api/nodes/' + n.id, { method: 'DELETE' });
-                            if (res.status === 204) { await fetchNodes(); await fetchStats(); }
+                            await apiJson('/api/nodes/' + n.id, { method: 'DELETE' });
+                            await fetchNodes(); await fetchStats();
                         } catch (e) { console.error(e); }
                     }
                 };
@@ -821,8 +1385,8 @@
                     action: async () => {
                         confirmDialog.value = null;
                         try {
-                            const res = await apiFetch('/api/clients/' + c.id, { method: 'DELETE' });
-                            if (res.status === 204) { await fetchClients(); await fetchStats(); }
+                            await apiJson('/api/clients/' + c.id, { method: 'DELETE' });
+                            await fetchClients(); await fetchStats();
                         } catch (e) { console.error(e); }
                     }
                 };
@@ -839,20 +1403,110 @@
                 const url = subUrl(c);
                 try {
                     await navigator.clipboard.writeText(url);
+                    showToast('Ссылка скопирована', 'success');
                 } catch (e) {
                     const ta = document.createElement('textarea');
                     ta.value = url; document.body.appendChild(ta);
                     ta.select(); document.execCommand('copy'); ta.remove();
+                    showToast('Ссылка скопирована', 'success');
                 }
             };
 
             const showQr = (c) => {
                 qrSub.value = c;
                 qrSubUrl.value = subUrl(c);
-                qrSrc.value = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' + encodeURIComponent(qrSubUrl.value);
+                // Generated locally by the panel — no external QR service.
+                qrSrc.value = '/api/clients/' + c.id + '/qr?host=' + encodeURIComponent(location.origin);
             };
 
-            // -- Update checker (GitHub Releases) --------------------
+            // -- Settings ---------------------------------------------
+            const settingsForm = ref({});
+            const isSavingSettings = ref(false);
+            const settingsMsg = ref('');
+            const settingsMsgType = ref('info');
+            const passwordForm = ref({ old_password: '', new_password: '' });
+            const isChangingPassword = ref(false);
+            const passwordMsg = ref('');
+            const passwordMsgType = ref('info');
+            const dbMsg = ref('');
+
+            const fetchSettings = async () => {
+                try {
+                    const s = await apiJson('/api/settings');
+                    settingsForm.value = {
+                        telegram_bot_token: s.telegram_bot_token || '',
+                        telegram_admin_chat_id: s.telegram_admin_chat_id || '',
+                        notify_expiry: s.notify_expiry === '1',
+                        notify_limit: s.notify_limit === '1',
+                        notify_node_offline: s.notify_node_offline === '1',
+                        panel_url: s.panel_url || '',
+                        node_poll_interval: parseInt(s.node_poll_interval) || 60,
+                        traffic_poll_interval: parseInt(s.traffic_poll_interval) || 300
+                    };
+                    settingsMsg.value = '';
+                } catch (e) { console.error(e); }
+            };
+
+            const saveSettings = async () => {
+                isSavingSettings.value = true;
+                settingsMsg.value = '';
+                try {
+                    await apiJson('/api/settings', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(settingsForm.value)
+                    });
+                    settingsMsg.value = 'Сохранено'; settingsMsgType.value = 'success';
+                } catch (e) {
+                    settingsMsg.value = e.message; settingsMsgType.value = 'error';
+                }
+                isSavingSettings.value = false;
+            };
+
+            const testTelegram = async () => {
+                try {
+                    const data = await apiJson('/api/settings/telegram-test', { method: 'POST' });
+                    settingsMsg.value = data.message; settingsMsgType.value = 'success';
+                } catch (e) {
+                    settingsMsg.value = e.message; settingsMsgType.value = 'error';
+                }
+            };
+
+            const changePassword = async () => {
+                isChangingPassword.value = true;
+                passwordMsg.value = '';
+                try {
+                    const data = await apiJson('/api/settings/password', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(passwordForm.value)
+                    });
+                    passwordMsg.value = data.message; passwordMsgType.value = 'success';
+                    passwordForm.value = { old_password: '', new_password: '' };
+                } catch (e) {
+                    passwordMsg.value = e.message; passwordMsgType.value = 'error';
+                }
+                isChangingPassword.value = false;
+            };
+
+            const downloadBackup = () => { window.open('/api/backup', '_blank'); };
+
+            const resetStats = () => {
+                confirmDialog.value = {
+                    title: 'Сбросить статистику?',
+                    text: 'Счётчики трафика всех пользователей обнулятся, история трафика (график на дашборде) будет удалена. Пользователи и лимиты останутся.',
+                    action: async () => {
+                        confirmDialog.value = null;
+                        try {
+                            const data = await apiJson('/api/stats/reset', { method: 'POST' });
+                            dbMsg.value = data.message || 'Готово';
+                            await fetchStats();
+                        } catch (e) { showToast(e.message, 'error'); }
+                    }
+                };
+            };
+
+            // -- Update checker (GitHub) ------------------------------
             const updateInfo = ref({});
             const updateBannerVisible = ref(false);
 
@@ -861,8 +1515,6 @@
                     const res = await apiFetch('/api/update');
                     if (res.ok) {
                         updateInfo.value = await res.json();
-                        // "Не сейчас" hides the banner only for THIS release version;
-                        // a future release shows it again. Always re-checkable in Settings.
                         const dismissed = localStorage.getItem('forgefox_update_dismissed');
                         updateBannerVisible.value =
                             updateInfo.value.update_available &&
@@ -881,10 +1533,8 @@
             const updateNow = async () => {
                 updateBannerVisible.value = false;
                 try {
-                    const res = await apiFetch('/api/update/run', { method: 'POST' });
-                    const data = await res.json().catch(() => ({}));
-                    if (res.ok && data.status === 'updating') {
-                        // Poll until the panel comes back with a newer version
+                    const data = await apiJson('/api/update/run', { method: 'POST' });
+                    if (data.status === 'updating') {
                         const deadline = Date.now() + 300000;
                         const poll = setInterval(async () => {
                             try {
@@ -900,36 +1550,42 @@
                             if (Date.now() > deadline) clearInterval(poll);
                         }, 5000);
                         confirmDialog.value = { title: 'Обновление запущено', text: 'Панель перезапустится сама. Страница обновится автоматически (до 5 минут).', action: () => { confirmDialog.value = null; } };
-                    } else {
-                        confirmDialog.value = { title: 'Не удалось обновить', text: data.error || ('HTTP ' + res.status), action: () => { confirmDialog.value = null; } };
                     }
                 } catch (e) {
-                    confirmDialog.value = { title: 'Не удалось обновить', text: 'Нет соединения с панелью', action: () => { confirmDialog.value = null; } };
+                    confirmDialog.value = { title: 'Не удалось обновить', text: e.message, action: () => { confirmDialog.value = null; } };
                 }
             };
 
             onMounted(() => {
-                // Apply theme on load
                 document.documentElement.setAttribute('data-theme', currentTheme.value);
                 if (authToken.value) {
-                    // Validate the stored token; 401 will kick back to the login screen
                     fetchStats();
-                    renderChart();
+                    fetchTrafficStats();
                     fetchUpdateInfo();
                 }
             });
 
             return {
                 authToken, currentUser, loginForm, loginError, isLoggingIn, login, logout,
-                currentTab, switchTab, stats, currentTheme, setTheme,
-                nodes, newNode, isAddingNode, nodeError, submitNode,
+                tabTitles, currentTab, switchTab, stats, currentTheme, setTheme,
+                nodes, newNode, isAddingNode, nodeError, submitNode, nodeById, countryFlag,
                 clients, newClient, isAddingClient, clientError, submitClient, clientNodeNames,
-                monitoring, logs,
+                bulkUsernames, bulkNodeIds, bulkResult, submitBulkClients,
+                statusLabel, statusClass, trafficBarWidth, trafficBarClass,
+                monitoring, logs, ramBarWidth, fmtBytes, fmtUptime,
                 editingNode, editNodeForm, editNodeError, isSavingNode, startEditNode, saveEditNode, checkNode, setupNode,
-                confirmDialog, deleteNode, deleteClient,
+                editingClient, editClientForm, editClientError, isSavingClient, startEditClient, saveEditClient,
+                resetPassword, blockClient, unblockClient, exportClients, importClients,
+                confirmDialog, deleteNode, deleteClient, infoDialog,
                 toasts, showToast,
                 qrSub, qrSubUrl, qrSrc, copySub, showQr,
-                updateInfo, updateBannerVisible, fetchUpdateInfo, dismissUpdate, updateNow
+                settingsForm, isSavingSettings, settingsMsg, settingsMsgType, fetchSettings, saveSettings, testTelegram,
+                passwordForm, isChangingPassword, passwordMsg, passwordMsgType, changePassword,
+                downloadBackup, resetStats, dbMsg,
+                updateInfo, updateBannerVisible, fetchUpdateInfo, dismissUpdate, updateNow,
+                clientFilter, filteredClients, clientOnline,
+                nodeDetail, nodeSessions, openNodeDetail, rebootNode, nodeSessionCount,
+                trafficClient, showClientTraffic, extendClient, presetExpiry, fetchMonitoring
             };
         }
     }).mount('#app');

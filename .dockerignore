@@ -1,4 +1,7 @@
-target/
 .git/
+__pycache__/
+*.pyc
+.venv/
 data/
 *.db
+target/
