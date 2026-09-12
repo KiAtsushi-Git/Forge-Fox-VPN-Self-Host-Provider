@@ -42,8 +42,10 @@ ALTER TABLE clients ADD COLUMN status TEXT DEFAULT 'active';
 UPDATE clients SET status = 'active' WHERE status IS NULL OR status = '';
 
 -- Who performed the action (audit entries now carry the admin name).
-ALTER TABLE audit_log ADD COLUMN user TEXT;
-UPDATE audit_log SET user = 'system' WHERE user IS NULL OR user = '';
+-- "user" is quoted: it is a reserved word in Postgres (plain SQL here,
+-- the ORM quotes it automatically everywhere else).
+ALTER TABLE audit_log ADD COLUMN "user" TEXT;
+UPDATE audit_log SET "user" = 'system' WHERE "user" IS NULL OR "user" = '';
 
 -- Node extras: best-effort geo tag + last /proc/net/dev counters.
 ALTER TABLE nodes ADD COLUMN country TEXT;
