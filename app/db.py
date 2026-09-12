@@ -91,6 +91,24 @@ def _strip_comments(stmt: str) -> str:
     ).strip()
 
 
+def _dialect_of(sql: str) -> str:
+    """Dialect a migration is gated to ("postgres" / "sqlite" / "" = any).
+
+    Read from a `-- DIALECT: <name>` line in the leading comment block:
+    ALTER COLUMN (Postgres-only syntax) has no portable spelling, so those
+    migrations carry the marker and are skipped on other dialects.
+    """
+    for line in sql.splitlines():
+        if not line.strip():
+            continue
+        if not line.strip().startswith("--"):
+            return ""
+        marker = re.match(r"--\s*DIALECT:\s*(\w+)", line.strip(), re.I)
+        if marker:
+            return marker.group(1).lower()
+    return ""
+
+
 async def _execute_statement(conn, stmt: str) -> None:
     stmt = _strip_comments(stmt)
     if not stmt:
@@ -132,8 +150,14 @@ async def run_migrations() -> None:
         for filename in files:
             if filename in panel_applied or filename in sqlx_applied:
                 continue
-            log.info("Applying migration %s", filename)
             sql = (config.MIGRATIONS_DIR / filename).read_text(encoding="utf-8")
+            gated = _dialect_of(sql)
+            if gated and gated != DIALECT:
+                log.debug(
+                    "Skipping %s (for %s, database is %s)", filename, gated, DIALECT
+                )
+                continue
+            log.info("Applying migration %s", filename)
             # Strip `-- ...` comment lines BEFORE splitting: comments may
             # contain semicolons (they do), which would split mid-comment.
             sql = "\n".join(
