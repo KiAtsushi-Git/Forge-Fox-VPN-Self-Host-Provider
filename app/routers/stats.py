@@ -27,9 +27,9 @@ async def dashboard():
         clients = list((await db.execute(select(Client))).scalars())
         month_start = _month_start()
         rows = await db.execute(
-            select(TrafficHistory.client_id, func.sum(TrafficHistory.bytes)).where(
-                TrafficHistory.day >= month_start
-            )
+            select(TrafficHistory.client_id, func.sum(TrafficHistory.bytes))
+            .where(TrafficHistory.day >= month_start)
+            .group_by(TrafficHistory.client_id)
         )
         client_month_bytes = {cid: total for cid, total in rows.all()}
         # Clients created before this month carry used_bytes from before the
