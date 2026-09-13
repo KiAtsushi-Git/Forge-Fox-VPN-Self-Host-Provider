@@ -3,10 +3,11 @@
   * node poller      — SSH probe every `node_poll_interval` seconds: updates
                        node online/offline status and records per-day network
                        traffic into node_stats (delta vs. last counters).
-  * traffic collector— every `traffic_poll_interval` seconds reads the
-                       iptables FF-IN/FF-OUT counters per user on each node,
-                       updates clients.used_bytes + traffic_history, and
-                       enforces limits/expiry (auto-block on the nodes).
+  * traffic collector— every `traffic_poll_interval` seconds reads per-user
+                       byte counters from the users' SSH connections on each
+                       node (see ssh.probe_traffic), updates
+                       clients.used_bytes + traffic_history, and enforces
+                       limits/expiry (auto-block on the nodes).
 
 Both loops re-read their interval from the settings table on every cycle, so
 a Settings change applies without a restart.
