@@ -213,7 +213,10 @@ async def setup_node(node: Node) -> str:
 #         stack installed" means; ff-shell + group are the panel's user
 #         management layer (client-side Host installs don't create them).
 # Line 3: "DISK <used%> SESSIONS <user,user,...>" — root-disk usage and the
-#         forgefox-group users with an active SSH session (= live VPN users).
+#         forgefox-group users with a live sshd session. `who` is useless
+#         here: VPN connections are exec channels without a pty, which
+#         never register in utmp — the sshd child processes are the only
+#         reliable marker.
 _MONITOR_CMD = (
     "echo \"$(top -bn1 | awk '/Cpu\\(s\\)/{print 100-$8; exit}') "
     "$(grep MemAvailable /proc/meminfo | awk '{print int($2/1024)}') "
@@ -227,7 +230,8 @@ _MONITOR_CMD = (
     "SU=0; [ -f /etc/sudoers.d/forgefox ] && SU=1; "
     "SS=0; grep -q 'Match Group forgefox' /etc/ssh/sshd_config 2>/dev/null && SS=1; "
     "echo \"$FF $GR $BR $SU $SS\"; "
-    "SESS=''; for u in $(who 2>/dev/null | awk '{print $1}' | sort -u); do "
+    "SESS=''; for u in $(ps -eo uid,args 2>/dev/null | "
+    "awk '$1 >= 1000 && $2 == \"sshd:\" {split($3, a, \"@\"); print a[1]}' | sort -u); do "
     "id -nG \"$u\" 2>/dev/null | tr ' ' '\\n' | grep -qx forgefox && SESS=\"$SESS$u,\"; done; "
     "echo \"DISK $(df -P / 2>/dev/null | awk 'NR==2{gsub(/%/,\"\",$5); print int($5)}') SESSIONS $SESS\""
 )
