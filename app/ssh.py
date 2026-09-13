@@ -84,8 +84,8 @@ for IPT in iptables ip6tables; do
   $IPT -N FF-OUT 2>/dev/null || true
   $IPT -C INPUT  -j FF-IN  2>/dev/null || $IPT -I INPUT  1 -j FF-IN
   $IPT -C OUTPUT -j FF-OUT 2>/dev/null || $IPT -I OUTPUT 1 -j FF-OUT
-  $IPT -C FF-IN  -m owner --uid-owner $UID_$ 2>/dev/null || $IPT -A FF-IN  -m owner --uid-owner $UID_$
-  $IPT -C FF-OUT -m owner --uid-owner $UID_$ 2>/dev/null || $IPT -A FF-OUT -m owner --uid-owner $UID_$
+  $IPT -C FF-IN  -m owner --uid-owner "$FF_UID" 2>/dev/null || $IPT -A FF-IN  -m owner --uid-owner "$FF_UID"
+  $IPT -C FF-OUT -m owner --uid-owner "$FF_UID" 2>/dev/null || $IPT -A FF-OUT -m owner --uid-owner "$FF_UID"
 done
 """
 
@@ -106,7 +106,7 @@ async def provision_user(node: Node, username: str, password: str) -> None:
         f"  useradd -m -g forgefox -s \"$SHELL_PATH\" {_quote(username)}\n"
         "fi\n"
         f"echo {_quote(username + ':' + password)} | chpasswd\n"
-        f"UID_=$(id -u {_quote(username)})\n"
+        f"FF_UID=$(id -u {_quote(username)})\n"
         + _ACCOUNTING_SETUP
         + "echo PROVISION_OK\n"
     )
