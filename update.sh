@@ -23,8 +23,11 @@ git clone "$REPO_URL" "$INSTALL_DIR/build" 2>/dev/null || git clone --depth 1 "$
 UPDATE_COMMIT=$(git -C "$INSTALL_DIR/build" rev-parse HEAD)
 echo "[$(date '+%F %T')] Building commit $UPDATE_COMMIT"
 
-# Rebuild the image from the fresh source
-docker build --progress=plain --build-arg UPDATE_COMMIT="$UPDATE_COMMIT" -t "$IMAGE" "$INSTALL_DIR/build"
+# Rebuild the image from the fresh source. --progress=plain keeps the
+# builder from buffering output (build looks hung without it), but the
+# legacy builder doesn't know the flag — fall back to a plain build.
+docker build --progress=plain --build-arg UPDATE_COMMIT="$UPDATE_COMMIT" -t "$IMAGE" "$INSTALL_DIR/build" 2>/dev/null \
+    || docker build --build-arg UPDATE_COMMIT="$UPDATE_COMMIT" -t "$IMAGE" "$INSTALL_DIR/build"
 
 # Update the scripts (install.sh, update.sh) from the repo
 cp "$INSTALL_DIR/build/install.sh" "$INSTALL_DIR/install.sh" 2>/dev/null || true
